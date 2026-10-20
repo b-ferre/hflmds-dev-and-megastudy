@@ -11,6 +11,7 @@
 !/results/.gitkeep
 
 /clustering/precomputed_*
+/clustering/map_data.rds
 
 /*logs
 

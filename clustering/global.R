@@ -28,6 +28,10 @@ all_feat_names <- c(
   "delta_l1",
   "delta_cheby",
   "delta_scaled_cheby",
+  "smooth_delta_l2",
+  "smooth_delta_l1",
+  "smooth_delta_cheby",
+  "smooth_delta_scaled_cheby",
   "sme_l2",
   "sme_l1",
   "sme_cheby",
@@ -49,6 +53,7 @@ INITCLUSTERSETTINGS <- c(                                                       
   setNames(as.list(
     c(
       1, 0, 0, 0,
+      0, 0, 0, 0,
       0, 0, 0, 0,
       0, 0, 0, 0
     )
@@ -170,7 +175,7 @@ get_pairwise_distance_mtx <- function(featwts, comb_func, dszn_bool_vec, kge_thr
   ests_to_use <- ests_to_keep[sapply(ests_to_keep, function(ident_i) {
     inf_score_i <- precomputed_score_df$inf_kge[precomputed_score_df$model_identifier == ident_i]                              ## nolint
     retval <- inf_score_i > kge_threshold
-    if (!retval) removed_due_to_kge <- removed_due_to_kge + 1
+    if (!retval) removed_due_to_kge <<- removed_due_to_kge + 1
     retval
   })]
 
@@ -183,7 +188,7 @@ get_pairwise_distance_mtx <- function(featwts, comb_func, dszn_bool_vec, kge_thr
   cat("clusterable catchment list is done being trimmed. of the initial",
       length(unique_gridcodes), "available catchments,",
       removed_due_to_kge, "were removed due to low inferential KGE. of the remaining",  ## nolint
-      length(ests_to_use), "models,", num_centered, "are deseasonalized")
+      length(ests_to_use), "models,", num_centered, "are deseasonalized\n")
 
   weighted_dist_components <- lapply(names(precomputed_feature_dist_mats),                                                            ## nolint
                                      function(name_j) {
@@ -230,6 +235,24 @@ get_pairwise_distance_mtx <- function(featwts, comb_func, dszn_bool_vec, kge_thr
     new_mat <- rank_matrix_cdf(plus_mat)
     dimnames(new_mat) <- dimnames(plus_mat)
     return(new_mat) ## nolint"
+  } else if (comb_func == "test3") {
+    weighted_dist_components <- lapply(seq_along(weighted_dist_components), function(i) {
+      m_i <- weighted_dist_components[[i]]
+
+      if (any(!is.finite(m_i))) {
+        stop(paste0("ERROR: non-finite values in component", names(weighted_dist_components)[i]))
+      }
+      transf_m_i <- rank_matrix_cdf(m_i)
+      dimnames(transf_m_i) <- dimnames(m_i)
+      as.matrix(transf_m_i)
+    })
+    new_mat <- Reduce("+", weighted_dist_components)
+    return(new_mat) ## nolint"
+  } else if (comb_func == "test4") {
+    plus_mat <- Reduce("+", weighted_dist_components)
+    new_mat <- (0.8 * rank_matrix_cdf(plus_mat)) + (0.2 * plus_mat)
+    dimnames(new_mat) <- dimnames(plus_mat)
+    return(new_mat) ## nolint
   } else {
     warning(paste0("invalid comb_func (\"", comb_func, "\") passed to",
                    "get_pairwise_distance(). Defaulting to \"+\"."))

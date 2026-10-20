@@ -35,6 +35,33 @@ shinyUI(fluidPage(
           )
         ),
         accordion_panel(
+          title = "Delta Comparisons",
+          sliderInput(
+            inputId = "smooth_delta_l2_wt",
+            label = "L2 Distance",
+            min = 0, max = 1,
+            value = INITCLUSTERSETTINGS$delta_l2_wt, step = 0.05
+          ),
+          sliderInput(
+            inputId = "smooth_delta_l1_wt",
+            label = "L1 Total Transfer Similarity",
+            min = 0, max = 1,
+            value = INITCLUSTERSETTINGS$delta_l1_wt, step = 0.05
+          ),
+          sliderInput(
+            inputId = "smooth_delta_cheby_wt",
+            label = "Chebyshev Distance",
+            min = 0, max = 1,
+            value = INITCLUSTERSETTINGS$delta_cheby_wt, step = 0.05
+          ),
+          sliderInput(
+            inputId = "smooth_delta_scaled_cheby_wt",
+            label = "Scaled Chebyshev Distance",
+            min = 0, max = 1,
+            value = INITCLUSTERSETTINGS$delta_scaled_cheby_wt, step = 0.05
+          )
+        ),
+        accordion_panel(
           title = "Maximally Effective Lag Vector Comparisons",
           sliderInput(
             inputId = "sme_l2_wt",
@@ -105,7 +132,7 @@ shinyUI(fluidPage(
           selectInput(
             inputId = "comb_func",
             label = "Combination Function",
-            choices = c("test", "test2"),
+            choices = c("test", "test2", "test3", "test4"),
             selected = INITCLUSTERSETTINGS$comb_func
           ),
           selectInput(

@@ -3,6 +3,7 @@ tryCatch(expr = setwd("./clustering"), error = function(e) {})
 library(stringr)
 library(lattice)
 library(RColorBrewer)                                                                                             ## nolint
+library(stats)
 
 source("./shared_helpers.R")
 
@@ -116,6 +117,30 @@ for (i in seq_len(nrow(beta_mtx))) {
 }
 close(p)
 
+## pre-populate smoothed delta matrix for fast distance calculations
+## pre-populate beta matrix for fast beta vector lookup
+smooth_delta <- function(dvec, obl_size = 7, smooth_window = 18) {
+  # first, obliterate short spikes of length < 5
+  dvec_no_spike <- runmed(dvec, k = obl_size)
+
+  # smooth the resulting vector using rolling average
+  window_weights <- rep(1 / smooth_window, smooth_window)
+  dvec_smooth <- stats::filter(dvec_no_spike, window_weights, sides = 2)
+
+  dvec_smooth
+}
+
+cat("Constructing Smoothed Delta Matrix...\n")
+p <- txtProgressBar(min = 0, max = n, style = 3)
+smooth_delta_mtx <- matrix(nrow = n, ncol = m + 1, dimnames = list(model_idents, NULL))                             ## nolint
+for (i in seq_len(nrow(beta_mtx))) {
+  model_identifier_i <- rownames(beta_mtx)[i]
+  delta_vec_i <- delta_mtx[model_identifier_i, ]
+  smooth_delta_mtx[model_identifier_i, ] <- smooth_delta(delta_vec_i)
+  setTxtProgressBar(p, i)
+}
+close(p)
+
 ## pre-populate total transfer matrix for fast distance calculations
 ## pre-populate beta matrix for fast beta vector lookup
 cat("Constructing Total Transfer Matrix...\n")
@@ -192,6 +217,11 @@ all_feat_names <- c(
   "delta_cheby",
   "delta_scaled_cheby",
 
+  "smooth_delta_l2",
+  "smooth_delta_l1",
+  "smooth_delta_cheby",
+  "smooth_delta_scaled_cheby",
+
   "sme_l2",
   "sme_l1",
   "sme_cheby",
@@ -213,6 +243,14 @@ precomputed_feature_dist_mats$delta_l1 <- fast_distance(delta_mtx, "manhattan") 
 precomputed_feature_dist_mats$delta_cheby <- fast_distance(delta_mtx, "maximum")                                    ## nolint
 precomputed_feature_dist_mats$delta_scaled_cheby <- scale_chebyshev(
   precomputed_feature_dist_mats$delta_cheby, delta_mtx
+)
+
+cat("Computing Pairwise Smooth Delta Distances...\n")
+precomputed_feature_dist_mats$smooth_delta_l2 <- fast_distance(smooth_delta_mtx, "euclidean")                                     ## nolint
+precomputed_feature_dist_mats$smooth_delta_l1 <- fast_distance(smooth_delta_mtx, "manhattan")                                     ## nolint
+precomputed_feature_dist_mats$smooth_delta_cheby <- fast_distance(smooth_delta_mtx, "maximum")                                    ## nolint
+precomputed_feature_dist_mats$smooth_delta_scaled_cheby <- scale_chebyshev(
+  precomputed_feature_dist_mats$delta_cheby, smooth_delta_mtx
 )
 
 cat("Computing Pairwise SME Distances...\n")
