@@ -8,7 +8,8 @@ shinyServer(function(input, output, session) {
       comb_func = INITCLUSTERSETTINGS$comb_func,
       n_pts_core = INITCLUSTERSETTINGS$n_pts_core,
       n_pts_clust = INITCLUSTERSETTINGS$n_pts_clust,
-      dszn_bool = get_deseason_bool_vec_from_scheme(INITCLUSTERSETTINGS$deseasonalization_selection, INITCLUSTERSETTINGS$dszn_thresh_selection)     ## nolint
+      dszn_bool = get_deseason_bool_vec_from_scheme(INITCLUSTERSETTINGS$deseasonalization_selection, INITCLUSTERSETTINGS$dszn_thresh_selection),     ## nolint
+      kge_thresh = INITCLUSTERSETTINGS$min_kge_for_clust
     )
   )
   cluster_rep_cache <- reactiveVal()
@@ -44,7 +45,8 @@ shinyServer(function(input, output, session) {
       comb_func = comb_func,
       n_pts_core = n_pts_core,
       n_pts_clust = n_pts_clust,
-      dszn_bool = get_deseason_bool_vec_from_scheme(input$deseasonalization_selection, input$dszn_thresh_selection)     ## nolint
+      dszn_bool = get_deseason_bool_vec_from_scheme(input$deseasonalization_selection, input$dszn_thresh_selection),     ## nolint
+      kge_thresh = input$min_kge_for_clust
     )
     cat("clustering finished\n")
     clustering_result(new_clustering_res)

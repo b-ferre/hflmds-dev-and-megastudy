@@ -99,13 +99,13 @@ shinyUI(fluidPage(
           sliderInput(
             inputId = "n_pts_clust",
             label = "Minimum Cluster Size",
-            min = 2, max = 100,
+            min = 2, max = 20,
             value = INITCLUSTERSETTINGS$n_pts_clust, step = 1
           ),
           selectInput(
             inputId = "comb_func",
             label = "Combination Function",
-            choices = c("+", "euc", "log(+)", "log(euc)", "test"),
+            choices = c("test", "test2"),
             selected = INITCLUSTERSETTINGS$comb_func
           ),
           selectInput(
@@ -120,7 +120,12 @@ shinyUI(fluidPage(
           sliderInput(
             inputId = "dszn_thresh_selection",
             label = "Definition of \"Meaningfully Better\" (Above)",
-            min = 0, max = 1, value = INITCLUSTERSETTINGS$dszn_thresh_selection, step = 0.05
+            min = 0, max = 0.5, value = INITCLUSTERSETTINGS$dszn_thresh_selection, step = 0.01
+          ),
+          sliderInput(
+            inputId = "min_kge_for_clust",
+            label = "Min Inferential KGE to Use in Clustering",
+            min = -1, max = 1, value = INITCLUSTERSETTINGS$min_kge_for_clust, step = 0.01
           )
         ),
         accordion_panel(

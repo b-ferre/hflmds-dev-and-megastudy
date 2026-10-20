@@ -48,17 +48,18 @@ all_feat_weight_names <- sapply(
 INITCLUSTERSETTINGS <- c(                                                                                                             ## nolint
   setNames(as.list(
     c(
-      1, 0, 0.3, 0,
-      0, 0.2, 0, 0,
-      0.2, 0.1, 0, 0
+      1, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0
     )
   ), all_feat_weight_names),                                                                                                          ## nolint
   list(
-    comb_func = "test",
+    comb_func = "test2",
     n_pts_core = 3,
     n_pts_clust = 9,
-    deseasonalization_selection = "Wherever Meaningfully Better Than Uncentered",
-    dszn_thresh_selection = 0
+    deseasonalization_selection = "Wherever Meaningfully Better Than Uncentered",                                                     ## nolint
+    dszn_thresh_selection = 0.12,
+    min_kge_for_clust = 0
   )
 )
 debugmode <- TRUE
@@ -139,7 +140,7 @@ get_inf_r2 <- function(gridcode, dszn_bool) {
 #' should be used for that gridcode
 #'
 #' @return a matrix with overall pairwise distances
-get_pairwise_distance_mtx <- function(featwts, comb_func, dszn_bool_vec) {
+get_pairwise_distance_mtx <- function(featwts, comb_func, dszn_bool_vec, kge_threshold = 0) {
   stopifnot(length(dszn_bool_vec) == length(unique_gridcodes))
 
   nfeats <- length(precomputed_feature_dist_mats)
@@ -161,9 +162,28 @@ get_pairwise_distance_mtx <- function(featwts, comb_func, dszn_bool_vec) {
     names(featwts) <- names(precomputed_feature_dist_mats)                                                                            ## nolint
   }
 
-  ests_to_use <- sapply(unique_gridcodes, function(gc) {
+  ests_to_keep <- sapply(unique_gridcodes, function(gc) {
     paste0(gc, "_", to_dszn_key(dszn_bool_vec[which(unique_gridcodes == gc)]))
   })
+
+  removed_due_to_kge <- 0
+  ests_to_use <- ests_to_keep[sapply(ests_to_keep, function(ident_i) {
+    inf_score_i <- precomputed_score_df$inf_kge[precomputed_score_df$model_identifier == ident_i]                              ## nolint
+    retval <- inf_score_i > kge_threshold
+    if (!retval) removed_due_to_kge <- removed_due_to_kge + 1
+    retval
+  })]
+
+  num_centered <- sum(as.numeric(sapply(
+    ests_to_use,
+    function(fn_) {
+      str_split(fn_, "_")[[1]][2] == "centered"
+    }
+  )))
+  cat("clusterable catchment list is done being trimmed. of the initial",
+      length(unique_gridcodes), "available catchments,",
+      removed_due_to_kge, "were removed due to low inferential KGE. of the remaining",  ## nolint
+      length(ests_to_use), "models,", num_centered, "are deseasonalized")
 
   weighted_dist_components <- lapply(names(precomputed_feature_dist_mats),                                                            ## nolint
                                      function(name_j) {
@@ -190,23 +210,26 @@ get_pairwise_distance_mtx <- function(featwts, comb_func, dszn_bool_vec) {
     result
   }
 
-  if (comb_func == "euc") {
-    sqrt(Reduce("+", lapply(weighted_dist_components, function(m) m^2)))
-  } else if (comb_func == "+") {
-    Reduce("+", weighted_dist_components)
-  } else if (comb_func == "log(euc)") {
-    euc_mat <- sqrt(Reduce("+", lapply(weighted_dist_components, function(m) m^2)))   ## nolint
-    euc_mat <- euc_mat / max(euc_mat)
-    log1p(euc_mat)
-  } else if (comb_func == "log(+)") {
-    plus_mat <- Reduce("+", weighted_dist_components)
-    plus_mat <- plus_mat / max(plus_mat)
-    log1p(plus_mat)
-  } else if (comb_func == "test") {
+  if (comb_func == "test") {
     plus_mat <- Reduce("+", weighted_dist_components)
     new_mat <- rank_matrix_cdf(plus_mat)
     dimnames(new_mat) <- dimnames(plus_mat)
     return(new_mat) ## nolint
+  } else if (comb_func == "test2") {
+    weighted_dist_components <- lapply(seq_along(weighted_dist_components), function(i) {
+      m_i <- weighted_dist_components[[i]]
+
+      if (any(!is.finite(m_i))) {
+        stop(paste0("ERROR: non-finite values in component", names(weighted_dist_components)[i]))
+      }
+      transf_m_i <- rank_matrix_cdf(m_i)
+      dimnames(transf_m_i) <- dimnames(m_i)
+      as.matrix(transf_m_i)
+    })
+    plus_mat <- Reduce("+", weighted_dist_components)
+    new_mat <- rank_matrix_cdf(plus_mat)
+    dimnames(new_mat) <- dimnames(plus_mat)
+    return(new_mat) ## nolint"
   } else {
     warning(paste0("invalid comb_func (\"", comb_func, "\") passed to",
                    "get_pairwise_distance(). Defaulting to \"+\"."))
@@ -283,13 +306,18 @@ get_beta_plot <- function(model_identifier) {
 ###############################################################################
 #' TODO: document this
 get_deseason_bool_vec_from_scheme <- function(scheme_key, threshold = NULL) {                                                         ## nolint
-  cat("RUNNING DSZN BOOL FROM SCHEME KEY\n")
-  cat("SCHEME KEY : \"", scheme_key, "\"")
+  if (debugmode) {
+    threshold_str <- paste0(" and threshold: ", threshold)
+    if (scheme_key %in% c("Everywhere", "Nowhere")) {
+      threshold_str <- ""
+    }
+    cat("running get_deseason_bool_vec_from_scheme() with scheme_key:", scheme_key, threshold_str, "\n")                              ## nolint
+  }
 
   if (scheme_key == "Everywhere") {
-    rep(TRUE, length(unique_gridcodes))
+    ret_vec <- rep(TRUE, length(unique_gridcodes))
   } else if (scheme_key == "Nowhere") {
-    rep(FALSE, length(unique_gridcodes))
+    ret_vec <- rep(FALSE, length(unique_gridcodes))
   } else if (scheme_key == "Wherever Meaningfully Better Than Uncentered") {
     if (is.null(threshold)) {
       threshold <- 0
@@ -303,13 +331,13 @@ get_deseason_bool_vec_from_scheme <- function(scheme_key, threshold = NULL) {   
       str_split(mid, "_")[[1]][2] == "uncentered"
     })
 
-    stopifnot((sum(centered_indexes) + sum(uncentered_indexes)) == nrow(precomputed_score_df))
+    stopifnot((sum(centered_indexes) + sum(uncentered_indexes)) == nrow(precomputed_score_df))                                        ## nolint
 
     centered_kges <- precomputed_score_df$inf_kge[centered_indexes]
     uncentered_kges <- precomputed_score_df$inf_kge[uncentered_indexes]
     score_diff <- centered_kges - uncentered_kges
 
-    score_diff > threshold
+    ret_vec <- score_diff > threshold
 
   } else if (scheme_key == "Wherever Not Meaningfully Worse Than Uncentered") {
     if (is.null(threshold)) {
@@ -329,11 +357,16 @@ get_deseason_bool_vec_from_scheme <- function(scheme_key, threshold = NULL) {   
     uncentered_kges <- precomputed_score_df$inf_kge[uncentered_indexes]
     score_diff <- uncentered_kges - centered_kges
 
-    !(score_diff > threshold)
+    ret_vec <- !(score_diff > threshold)
 
   } else {
     stop(paste0("Invalid Deseasonalization Scheme (", scheme_key, ") Passed to get_deseason_bool_vec_from_scheme()"))                 ## nolint
   }
+
+  if (debugmode) {
+    cat("  > returning bool vec that uses", sum(ret_vec), "deseasonalized estimates out of", length(ret_vec), "\n")                   ## nolint
+  }
+  ret_vec
 }
 
 #' @param featwts is a vector of scalars by which each component of the overall
@@ -354,12 +387,14 @@ get_hdbscan_labels <- function(featwts,
                                comb_func,
                                n_pts_core,
                                n_pts_clust,
-                               dszn_bool_vec) {
+                               dszn_bool_vec,
+                               kge_thresh = 0) {
   print(head(dszn_bool_vec))
 
   dist_mat <- get_pairwise_distance_mtx(featwts = featwts,
                                         comb_func = comb_func,
-                                        dszn_bool = dszn_bool_vec)
+                                        dszn_bool = dszn_bool_vec,
+                                        kge_thresh = kge_thresh)
 
   ## check dist_mat for any issues
   stopifnot(colnames(dist_mat) == rownames(dist_mat))
@@ -391,6 +426,8 @@ get_hdbscan_labels <- function(featwts,
     pdf("./distmatboxplotNONOUTLIERS.pdf")
     boxplot(temp_mat[upper.tri(temp_mat)])
     dev.off()
+
+    cat("clustering finished; num outliers:", sum(labels == 0), "\n")
   }
 
   list(labels = labels, dist_mat = dist_mat, dszn_bool_vec = dszn_bool_vec)
