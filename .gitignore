@@ -1,0 +1,17 @@
+/data/processed/*
+!/data/processed/.gitkeep
+
+/data/raw/*
+!/data/raw/.gitkeep
+
+/deploy_to_cc/data/*
+!/deploy_to_cc/data/.gitkeep
+
+/results/*
+!/results/.gitkeep
+
+/clustering/precomputed_*
+
+/*logs
+
+/other
