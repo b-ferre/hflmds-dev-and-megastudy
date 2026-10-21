@@ -290,6 +290,9 @@ render_beta_and_derived_feats <- function(bvec, plot_data) {
   d_plot <- make_line_plot(
     p$delta, "Delta Vector", p$max_delta
   )
+  # smooth_d_plot <- make_line_plot(
+  #   p$smooth_delta, "Smoothed Delta Vector", p$max_delta
+  # )
   tt_plot <- make_line_plot(
     p$total_transfer, "Total Transfer Vector", p$max_tt
   )
@@ -298,7 +301,7 @@ render_beta_and_derived_feats <- function(bvec, plot_data) {
   )
 
   combined <- (
-    beta_plot + (d_plot / tt_plot / sme_plot)
+    beta_plot + (d_plot / smooth_d_plot / tt_plot / sme_plot)
   ) +
     patchwork::plot_layout(widths = c(2, 1))
 

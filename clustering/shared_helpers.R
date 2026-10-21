@@ -17,6 +17,23 @@ calculate_delta <- function(bvec, m = 364, max_lag = 150) {
   d
 }
 
+## TODO: document
+smooth_delta <- function(dvec, obl_size = 7, smooth_window = 18) {
+  # first, obliterate short spikes of length < 5
+  dvec_no_spike <- runmed(dvec, k = obl_size)
+
+  # smooth the resulting vector using rolling average
+  window_weights <- rep(1 / smooth_window, smooth_window)
+  dvec_smooth <- stats::filter(dvec_no_spike, window_weights, sides = 2)
+
+  # replace NAs with original values to prevent breaking fast distance calc
+  dvec_smooth[is.na(dvec_smooth)] <- dvec[is.na(dvec_smooth)]
+
+  stopifnot(!any(!is.finite(dvec_smooth)))
+
+  dvec_smooth
+}
+
 #' @param bvec is a flattened, lag-minor indexed vector of B(s, t) coefficients
 #'
 #' @return a (m + 1)-length vector representing the total transfer on day t*
@@ -50,11 +67,13 @@ plot_beta_and_derived_feats <- function(
   max_sme = NULL) {
 
   d_vec <- calculate_delta(bvec, m = m, max_lag = max_lag)
+  d_vec_smooth <- smooth_delta(d_vec)
   tt_vec <- calculate_total_transfer(bvec, m = m, max_lag = max_lag)
   sme_vec <- calculate_max_eff_lag_vec(bvec, m = m, max_lag = max_lag)
 
   list(
     delta = d_vec,
+    smooth_delta = d_vec_smooth,
     total_transfer = tt_vec,
     max_effective_lag = sme_vec,
 
@@ -133,70 +152,4 @@ plot_beta <- function(bvec, title = "", ncolors = 20, m = 364, max_lag = 150) {
             colorkey = list(axis.text = list(cex = 1.2)),
             aspect = "xy",
             main = title)
-}
-
-#' @param bvec is a flattened, lag-minor indexed vector of B(s, t) coefficients
-#' @param title is a string to display above the levelplot as a plot title
-#' @param ncolors is the number of unique non-white colors to use in the palette
-#'
-#' @return a levelplot() object of B(s, t) values with x = day and y = lag
-plot_beta_and_derived_feats_OLD <- function(bvec,
-                                        title = "",
-                                        ncolors = 20,
-                                        m = 364,
-                                        max_lag = 150,
-                                        max_delta = NULL,
-                                        max_tt = NULL,
-                                        max_sme = NULL) {
-  beta_plot <- as.ggplot(plot_beta(bvec, title = "Beta Surface", ncolors = ncolors, m = m, max_lag = max_lag))      ## nolint
-
-  day_vec <- seq_len(m + 1)
-
-  d_vec <- calculate_delta(bvec = bvec, m = m, max_lag = max_lag)
-  if (is.null(max_delta)) {
-    max_delta <- max(d_vec) * 1.2
-  }
-  d_data <- data.frame(
-    x = day_vec,
-    y = d_vec
-  )
-  d_plot <- ggplot(d_data, aes(x = x, y = y)) +                                                                     ## nolint
-    geom_line() +
-    coord_cartesian(ylim = c(0, max_delta)) +
-    ggtitle("Delta Vector") +
-    theme(plot.title = element_text(hjust = 0.5))
-
-  tt_vec <- calculate_total_transfer(bvec = bvec, m = m, max_lag = max_lag)
-  if (is.null(max_tt)) {
-    max_tt <- max(tt_vec) * 1.2
-  }
-  tt_data <- data.frame(
-    x = day_vec,
-    y = tt_vec
-  )
-  tt_plot <- ggplot(tt_data, aes(x = x, y = y)) +                                                                   ## nolint
-    geom_line() +
-    coord_cartesian(ylim = c(0, max_tt)) +
-    ggtitle("Total Transfer Vector") +
-    theme(plot.title = element_text(hjust = 0.5))
-
-  sme_vec <- calculate_max_eff_lag_vec(bvec = bvec, m = m, max_lag = max_lag)
-  if (is.null(max_sme)) {
-    max_sme <- max(sme_vec) * 1.2
-  }
-  sme_data <- data.frame(
-    x = day_vec,
-    y = sme_vec
-  )
-  sme_plot <- ggplot(sme_data, aes(x = x, y = y)) +                                                                   ## nolint
-    geom_line() +
-    coord_cartesian(ylim = c(0, max_sme)) +
-    ggtitle("Maximally Effective Lag Vector") +
-    theme(plot.title = element_text(hjust = 0.5))
-
-  list(bplot = beta_plot,
-       dplot = d_plot,
-       ttplot = tt_plot,
-       smeplot = sme_plot,
-       overall_title_string = title)
 }

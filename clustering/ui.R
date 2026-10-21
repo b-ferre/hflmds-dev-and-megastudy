@@ -35,7 +35,7 @@ shinyUI(fluidPage(
           )
         ),
         accordion_panel(
-          title = "Delta Comparisons",
+          title = "Smoothed Delta Comparisons",
           sliderInput(
             inputId = "smooth_delta_l2_wt",
             label = "L2 Distance",

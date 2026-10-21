@@ -119,17 +119,6 @@ close(p)
 
 ## pre-populate smoothed delta matrix for fast distance calculations
 ## pre-populate beta matrix for fast beta vector lookup
-smooth_delta <- function(dvec, obl_size = 7, smooth_window = 18) {
-  # first, obliterate short spikes of length < 5
-  dvec_no_spike <- runmed(dvec, k = obl_size)
-
-  # smooth the resulting vector using rolling average
-  window_weights <- rep(1 / smooth_window, smooth_window)
-  dvec_smooth <- stats::filter(dvec_no_spike, window_weights, sides = 2)
-
-  dvec_smooth
-}
-
 cat("Constructing Smoothed Delta Matrix...\n")
 p <- txtProgressBar(min = 0, max = n, style = 3)
 smooth_delta_mtx <- matrix(nrow = n, ncol = m + 1, dimnames = list(model_idents, NULL))                             ## nolint
