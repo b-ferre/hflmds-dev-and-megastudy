@@ -52,19 +52,19 @@ all_feat_weight_names <- sapply(
 INITCLUSTERSETTINGS <- c(                                                                                                             ## nolint
   setNames(as.list(
     c(
-      1, 0, 0, 0,
       0, 0, 0, 0,
+      0.5, 0.2, 0.4, 1,
       0, 0, 0, 0,
       0, 0, 0, 0
     )
   ), all_feat_weight_names),                                                                                                          ## nolint
   list(
     comb_func = "test2",
-    n_pts_core = 3,
-    n_pts_clust = 9,
+    n_pts_core = 2,
+    n_pts_clust = 10,
     deseasonalization_selection = "Wherever Meaningfully Better Than Uncentered",                                                     ## nolint
-    dszn_thresh_selection = 0.12,
-    min_kge_for_clust = 0
+    dszn_thresh_selection = 0.15,
+    min_kge_for_clust = 0.25
   )
 )
 debugmode <- TRUE
@@ -119,7 +119,7 @@ to_dszn_key <- function(centered_bool) {
 #' @return a flattened, lag-minor indexed vector of B(s, t) coefficients
 #' with t = 1 corresponding to the first day of the hydrological year
 get_beta <- function(gridcode, dszn_bool) {
-  precomputed_beta_matrix[paste0(gridcode, "_", to_dszn_key(dszn_bool))]
+  precomputed_beta_matrix[paste0(gridcode, "_", to_dszn_key(dszn_bool)), ]
 }
 
 #' @param gridcode is the gridcode of the catchment of the inf kge to get
@@ -290,9 +290,9 @@ render_beta_and_derived_feats <- function(bvec, plot_data) {
   d_plot <- make_line_plot(
     p$delta, "Delta Vector", p$max_delta
   )
-  # smooth_d_plot <- make_line_plot(
-  #   p$smooth_delta, "Smoothed Delta Vector", p$max_delta
-  # )
+  smooth_d_plot <- make_line_plot(
+    as.numeric(unname(p$smooth_delta)), "Smoothed Delta Vector", p$max_delta
+  )
   tt_plot <- make_line_plot(
     p$total_transfer, "Total Transfer Vector", p$max_tt
   )
@@ -491,7 +491,11 @@ calculate_medoid_beta <- function(in_cluster_model_ids,
 
   medoid_id <- rownames(d)[which.min(rowSums(d))]
 
-  get_beta(medoid_id, dszn_bool)
+  medoid_gc <- str_split(medoid_id, "_")[[1]][1]
+  medoid_dszn_bool <- str_split(medoid_id, "_")[[1]][2] == "centered"
+
+  to_ret <- get_beta(medoid_gc, medoid_dszn_bool)
+  to_ret
 }
 
 #' @param n is the number of maximally distinct colors

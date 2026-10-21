@@ -3,6 +3,8 @@ library(RColorBrewer)
 library(ggplot2)
 library(ggplotify)
 library(grid)
+library(stats)
+library(signal)
 
 #' @param bvec is a flattened, lag-minor indexed vector of B(s, t) coefficients
 #'
@@ -17,21 +19,33 @@ calculate_delta <- function(bvec, m = 364, max_lag = 150) {
   d
 }
 
-## TODO: document
-smooth_delta <- function(dvec, obl_size = 7, smooth_window = 18) {
-  # first, obliterate short spikes of length < 5
+smooth_delta_sg <- function(dvec, obl_size, smooth_window) {
+  # first, obliterate short spikes of length < obl_size
   dvec_no_spike <- runmed(dvec, k = obl_size)
 
   # smooth the resulting vector using rolling average
-  window_weights <- rep(1 / smooth_window, smooth_window)
-  dvec_smooth <- stats::filter(dvec_no_spike, window_weights, sides = 2)
+  dvec_smooth <- sgolayfilt(dvec_no_spike, p = 3, n = smooth_window)
 
-  # replace NAs with original values to prevent breaking fast distance calc
-  dvec_smooth[is.na(dvec_smooth)] <- dvec[is.na(dvec_smooth)]
-
-  stopifnot(!any(!is.finite(dvec_smooth)))
+  dvec_smooth[is.na(dvec_smooth)] <- dvec_no_spike[is.na(dvec_smooth)]
 
   dvec_smooth
+}
+
+smooth_delta_n_times <- function(dvec, n = 30, obl_size = 35, smooth_window = 71, mode = "sg") {   ## nolint
+  for (i in seq_len(n)) {
+    if (mode == "sg") {
+      dvec <- smooth_delta_sg(dvec, obl_size = obl_size, smooth_window = smooth_window)       ## nolint
+    } else if (mode == "ra") {
+      dvec <- smooth_delta_ra(dvec, obl_size = obl_size, smooth_window = smooth_window)       ## nolint
+    } else {
+      stop("invalid mode provided")
+    }
+  }
+  dvec
+}
+
+smooth_delta <- function(dvec) {
+  smooth_delta_n_times(dvec)
 }
 
 #' @param bvec is a flattened, lag-minor indexed vector of B(s, t) coefficients

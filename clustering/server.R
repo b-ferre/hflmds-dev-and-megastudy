@@ -50,7 +50,9 @@ shinyServer(function(input, output, session) {
     )
     cat("clustering finished\n")
     clustering_result(new_clustering_res)
-  })
+  },
+  ignoreInit = TRUE
+  )
 
   ## render a map based on the most recent clustering result
   observeEvent(list(
@@ -302,7 +304,12 @@ shinyServer(function(input, output, session) {
         if (rep_cache_key %in% names(current_rep_cache)) {                                                                           ## nolint
           if (debugmode) cat("loading rep with key \"", rep_cache_key, "\" from cache...\n")                            ## nolint
           output$representative_plot_display <- renderPlot(
-            plot_beta(current_rep_cache[[paste0(rep_info$type, rep_info$cluster)]])                                     ## nolint
+            render_beta_and_derived_feats(
+              current_rep_cache[[paste0(rep_info$type, rep_info$cluster)]],
+              plot_beta_and_derived_feats(
+                current_rep_cache[[paste0(rep_info$type, rep_info$cluster)]]
+              )
+            )
           )
         } else {
           in_cluster_grids_i <- as.vector(names(res_i$labels)[res_i$labels == rep_info$cluster])                        ## nolint
@@ -315,7 +322,12 @@ shinyServer(function(input, output, session) {
             current_rep_cache[[paste0(rep_info$type, rep_info$cluster)]] <- new_rep                                     ## nolint
             cluster_rep_cache(current_rep_cache)
             output$representative_plot_display <- renderPlot(
-              plot_beta(new_rep)
+              render_beta_and_derived_feats(
+                new_rep,
+                plot_beta_and_derived_feats(
+                  new_rep
+                )
+              )
             )
           } else if (rep_info$type == "Median") {
             new_rep <- calculate_median_beta(
@@ -325,7 +337,12 @@ shinyServer(function(input, output, session) {
             current_rep_cache[[paste0(rep_info$type, rep_info$cluster)]] <- new_rep                                     ## nolint
             cluster_rep_cache(current_rep_cache)
             output$representative_plot_display <- renderPlot(
-              plot_beta(new_rep)
+              render_beta_and_derived_feats(
+                new_rep,
+                plot_beta_and_derived_feats(
+                  new_rep
+                )
+              )
             )
           } else {
             stop("invalid representative type (",
