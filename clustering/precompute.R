@@ -196,7 +196,7 @@ fast_euclidean_distance <- function(x) {
   d2[d2 < 0] <- 0
   diag(d2) <- 0
 
-  as.dist(sqrt(d2))
+  as.matrix(as.dist(sqrt(d2)))
 }
 
 ## helper function which takes a pairwise distance matrix of chebyshev
@@ -359,16 +359,21 @@ close(p)
 ###############################################################################
 
 ## map data
+cat("Saving Map Data...\n")
 saveRDS(map_data, file = "map_data.rds")
 
 ## precomputed plots
+cat("Saving Plots...\n")
 saveRDS(precomputed_beta_plots, file = "precomputed_beta_plots.rds")
 
 ## beta matrix
+cat("Saving Beta Matrix...\n")
 saveRDS(beta_mtx, file = "precomputed_beta_mtx.rds")
 
 ## pairwise distance matrices
+cat("Saving Precomputed Feature Distance Matrices...\n")
 saveRDS(precomputed_feature_dist_mats, file = "precomputed_feature_dist_mtxs.rds")                                  ## nolint
 
 ## score df
+cat("Saving Score Data Frame...\n")
 saveRDS(precomputed_score_df, file = "precomputed_score_df.rds")

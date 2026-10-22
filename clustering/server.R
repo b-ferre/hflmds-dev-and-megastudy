@@ -456,6 +456,8 @@ shinyServer(function(input, output, session) {
     updateSliderInput(session, "tt_cheby_wt", value = 1)
     updateSliderInput(session, "tt_cheby_wt", value = 1)
 
+    updateSliderInput(session, "global_l2_wt", value = 1)
+
     updateSliderInput(session, "n_pts_core", value = 3)
     updateSliderInput(session, "n_pts_clust", value = 9)
 
@@ -475,28 +477,29 @@ shinyServer(function(input, output, session) {
     updateSelectInput(session, "coloring_regime", selected = "Cluster Membership")
   }, ignoreInit = TRUE)
 
-  ## preset button two
-  ## FIXME: update this
+  ## preset button two (just use global l2 + hclust)
   observeEvent(input$preset_2, {
-    updateSliderInput(session, "delta_l2_wt", value = 1)
-    updateSliderInput(session, "delta_l1_wt", value = 1)
-    updateSliderInput(session, "delta_cheby_wt", value = 1)
-    updateSliderInput(session, "delta_scaled_cheby_wt", value = 1)
+    updateSliderInput(session, "delta_l2_wt", value = 0)
+    updateSliderInput(session, "delta_l1_wt", value = 0)
+    updateSliderInput(session, "delta_cheby_wt", value = 0)
+    updateSliderInput(session, "delta_scaled_cheby_wt", value = 0)
 
-    updateSliderInput(session, "smooth_delta_l2_wt", value = 1)
-    updateSliderInput(session, "smooth_delta_l1_wt", value = 1)
-    updateSliderInput(session, "smooth_delta_cheby_wt", value = 1)
-    updateSliderInput(session, "smooth_delta_scaled_cheby_wt", value = 1)
+    updateSliderInput(session, "smooth_delta_l2_wt", value = 0)
+    updateSliderInput(session, "smooth_delta_l1_wt", value = 0)
+    updateSliderInput(session, "smooth_delta_cheby_wt", value = 0)
+    updateSliderInput(session, "smooth_delta_scaled_cheby_wt", value = 0)
 
-    updateSliderInput(session, "sme_l2_wt", value = 1)
-    updateSliderInput(session, "sme_l1_wt", value = 1)
-    updateSliderInput(session, "sme_cheby_wt", value = 1)
-    updateSliderInput(session, "sme_cheby_wt", value = 1)
+    updateSliderInput(session, "sme_l2_wt", value = 0)
+    updateSliderInput(session, "sme_l1_wt", value = 0)
+    updateSliderInput(session, "sme_cheby_wt", value = 0)
+    updateSliderInput(session, "sme_cheby_wt", value = 0)
 
-    updateSliderInput(session, "tt_l2_wt", value = 1)
-    updateSliderInput(session, "tt_l1_wt", value = 1)
-    updateSliderInput(session, "tt_cheby_wt", value = 1)
-    updateSliderInput(session, "tt_cheby_wt", value = 1)
+    updateSliderInput(session, "tt_l2_wt", value = 0)
+    updateSliderInput(session, "tt_l1_wt", value = 0)
+    updateSliderInput(session, "tt_cheby_wt", value = 0)
+    updateSliderInput(session, "tt_cheby_wt", value = 0)
+
+    updateSliderInput(session, "global_l2_wt", value = 1)
 
     updateSliderInput(session, "n_pts_core", value = 3)
     updateSliderInput(session, "n_pts_clust", value = 9)
@@ -506,14 +509,14 @@ shinyServer(function(input, output, session) {
 
     updateSelectInput(session, "clust_algo", selected = "Hierarchical")
 
-    updateSelectInput(session, "comb_func", selected = "eCDF(+)")
-    updateSliderInput(session, "min_kge_for_clust", value = 0.4)
-    updateCheckboxInput(session, "remove_negative_beta_ests", value = TRUE)
+    updateSelectInput(session, "comb_func", selected = "+")
+    updateSliderInput(session, "min_kge_for_clust", value = -1)
+    updateCheckboxInput(session, "remove_negative_beta_ests", value = FALSE)
 
     updateSelectInput(session, "deseasonalization_selection",
-                      selected = "Wherever Meaningfully Better Than Uncentered")
-    updateSliderInput(session, "dszn_thresh_selection", value = 0.15)
+                      selected = "Wherever Not Meaningfully Worse Than Uncentered")   ## nolint
+    updateSliderInput(session, "dszn_thresh_selection", value = 0.05)
 
-    updateSelectInput(session, "coloring_regime", selected = "Cluster Membership")
+    updateSelectInput(session, "coloring_regime", selected = "Cluster Membership")    ## nolint
   }, ignoreInit = TRUE)
 })

@@ -183,7 +183,8 @@ shinyUI(fluidPage(
           selectInput(
             inputId = "comb_func",
             label = "Combination Function for Distance Components",
-            choices = c("eCDF(+)",
+            choices = c("+",
+                        "eCDF(+)",
                         "eCDF(+(eCDF))",
                         "+(eCDF)",
                         "(0.8)eCDF(+) + (0.2)(+)"),

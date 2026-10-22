@@ -61,7 +61,7 @@ INITCLUSTERSETTINGS <- c(                                                       
   ), all_feat_weight_names),                                                                                                          ## nolint
   list(
     comb_func = "(0.8)eCDF(+) + (0.2)(+)",
-    clust_algo = "ChatSlop",
+    clust_algo = "Hierarchical",
     n_pts_core = 2,
     n_pts_clust = 10,
     linkage_method = "ward.D2",
@@ -312,11 +312,6 @@ get_clustering_result <- function(
         linkage_method = clustering_algorithm_params$linkage_method,
         n_clusts = clustering_algorithm_params$n_clusts_hclust
       )
-    },
-    "ChatSlop" = {
-      a <- read.csv("../chatslop/row_clusters.csv")
-      stopifnot(identical(rownames(precomputed_beta_matrix), a$row_name))
-      setNames(a$cluster_k9, a$row_name)
     }
   )
   if (debugmode) {
@@ -443,7 +438,10 @@ get_pairwise_distance_mtx <- function(model_ids, featwts, comb_func) {
     result
   }
 
-  if (comb_func == "eCDF(+)") {
+  if (comb_func == "+") {
+    plus_mat <- Reduce("+", weighted_dist_components)
+    return(plus_mat) ## nolint
+  } else if (comb_func == "eCDF(+)") {
     plus_mat <- Reduce("+", weighted_dist_components)
     new_mat <- rank_matrix_cdf(plus_mat)
     dimnames(new_mat) <- dimnames(plus_mat)
