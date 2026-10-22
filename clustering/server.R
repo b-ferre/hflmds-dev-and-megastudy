@@ -510,8 +510,8 @@ shinyServer(function(input, output, session) {
     updateSelectInput(session, "clust_algo", selected = "Hierarchical")
 
     updateSelectInput(session, "comb_func", selected = "+")
-    updateSliderInput(session, "min_kge_for_clust", value = -1)
-    updateCheckboxInput(session, "remove_negative_beta_ests", value = FALSE)
+    updateSliderInput(session, "min_kge_for_clust", value = 0.2)
+    updateCheckboxInput(session, "remove_negative_beta_ests", value = TRUE)
 
     updateSelectInput(session, "deseasonalization_selection",
                       selected = "Wherever Not Meaningfully Worse Than Uncentered")   ## nolint
