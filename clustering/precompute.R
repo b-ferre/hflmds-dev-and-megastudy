@@ -185,6 +185,20 @@ fast_distance <- function(x, method) {
   ans
 }
 
+## even faster calculation of pairwise distance between rows of a matrix
+## using the identity |x-y| = |x| + |y| - 2
+fast_euclidean_distance <- function(x) {
+  norm_sq <- rowSums(x * x)
+
+  d2 <- outer(norm_sq, norm_sq, "+") - 2 * tcrossprod(x)
+
+  # adjust for flop rounding
+  d2[d2 < 0] <- 0
+  diag(d2) <- 0
+
+  as.dist(sqrt(d2))
+}
+
 ## helper function which takes a pairwise distance matrix of chebyshev
 ## distances, d, where d[i, j] is the cheby dist between rows i and j
 ## of the provided matrix x and returns a pairwise distance matrix of
@@ -219,7 +233,9 @@ all_feat_names <- c(
   "tt_l2",
   "tt_l1",
   "tt_cheby",
-  "tt_scaled_cheby"
+  "tt_scaled_cheby",
+
+  "global_l2"
 )
 
 precomputed_feature_dist_mats <- setNames(vector("list", length(all_feat_names)),                                   ## nolint
@@ -257,6 +273,9 @@ precomputed_feature_dist_mats$tt_cheby <- fast_distance(tt_mtx, "maximum")      
 precomputed_feature_dist_mats$tt_scaled_cheby <- scale_chebyshev(
   precomputed_feature_dist_mats$tt_cheby, tt_mtx
 )
+
+cat("Computing Overall Pairwise Euclidean Distances...\n")
+precomputed_feature_dist_mats$global_l2 <- fast_euclidean_distance(beta_mtx)
 
 ## check that distance matrices are symmetric
 stopifnot(!any(!unlist(lapply(precomputed_feature_dist_mats, isSymmetric))))                                        ## nolint

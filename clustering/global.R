@@ -4,7 +4,6 @@ library(RColorBrewer)
 library(grid)
 library(lattice)
 library(stringr)
-#library(dbscan)
 library(leafpop)
 library(ggplot2)
 library(later)
@@ -39,7 +38,8 @@ all_feat_names <- c(
   "tt_l2",
   "tt_l1",
   "tt_cheby",
-  "tt_scaled_cheby"
+  "tt_scaled_cheby",
+  "global_l2"
 )
 
 all_feat_weight_names <- sapply(
@@ -52,19 +52,24 @@ all_feat_weight_names <- sapply(
 INITCLUSTERSETTINGS <- c(                                                                                                             ## nolint
   setNames(as.list(
     c(
+      0.4, 0, 0.1, 0.2,
+      0.4, 0.25, 0.2, 0.3,
       0, 0, 0, 0,
-      0.5, 0.2, 0.4, 1,
-      0, 0, 0, 0,
-      0, 0, 0, 0
+      0.1, 0.15, 0.05, 0,
+      0
     )
   ), all_feat_weight_names),                                                                                                          ## nolint
   list(
-    comb_func = "test2",
+    comb_func = "(0.8)eCDF(+) + (0.2)(+)",
+    clust_algo = "ChatSlop",
     n_pts_core = 2,
     n_pts_clust = 10,
+    linkage_method = "ward.D2",
+    n_clusts_hclust = 8,
     deseasonalization_selection = "Wherever Meaningfully Better Than Uncentered",                                                     ## nolint
     dszn_thresh_selection = 0.15,
-    min_kge_for_clust = 0.25
+    min_kge_for_clust = 0.25,
+    remove_negative_beta_ests = TRUE
   )
 )
 debugmode <- TRUE
@@ -136,130 +141,6 @@ get_inf_r2 <- function(gridcode, dszn_bool) {
   round(precomputed_score_df$inf_r2[precomputed_score_df$model_identifier == paste0(gridcode, "_", to_dszn_key(dszn_bool))], 4)       ## nolint
 }
 
-#' @param featwts is a vector of scalars by which each component of the overall
-#' distance function should be weighted before combination
-#' @param comb_func is one of "+", "*", "euc" and dictates how the weighted
-#' feature-wise distance components are combined into an overall distance
-#' @param dszn_bool_vec is a sequence of booleans - one for each unique
-#' gridcode in the dataset - that represents whether the centered estimate
-#' should be used for that gridcode
-#'
-#' @return a matrix with overall pairwise distances
-get_pairwise_distance_mtx <- function(featwts, comb_func, dszn_bool_vec, kge_threshold = 0) {
-  stopifnot(length(dszn_bool_vec) == length(unique_gridcodes))
-
-  nfeats <- length(precomputed_feature_dist_mats)
-  if (is.null(featwts)) {
-    warning(paste0("NULL weight vector passed to get_pairwise_distance().",
-                   "  Defaulting to a weight = 1 for each feature."))
-    featwts <- rep(1, nfeats)
-    names(featwts) <- names(precomputed_feature_dist_mats)                                                                            ## nolint
-  }
-
-  if (length(featwts) != nfeats) {
-    warning(paste0("Length of weight vector passed to get_pairwise_distance()",
-                   " not equal to the number of features to weight.",
-                   "  Defaulting to a weight = 1 for each feature. (Mismatch: ",
-                   length(featwts), " vs. ", nfeats, ")"))
-    cat("   > weight names:", names(featwts), "\n",
-        "   > mat names:", names(precomputed_feature_dist_mats), "\n")                                                                ## nolint
-    featwts <- rep(1, nfeats)
-    names(featwts) <- names(precomputed_feature_dist_mats)                                                                            ## nolint
-  }
-
-  ests_to_keep <- sapply(unique_gridcodes, function(gc) {
-    paste0(gc, "_", to_dszn_key(dszn_bool_vec[which(unique_gridcodes == gc)]))
-  })
-
-  removed_due_to_kge <- 0
-  ests_to_use <- ests_to_keep[sapply(ests_to_keep, function(ident_i) {
-    inf_score_i <- precomputed_score_df$inf_kge[precomputed_score_df$model_identifier == ident_i]                              ## nolint
-    retval <- inf_score_i > kge_threshold
-    if (!retval) removed_due_to_kge <<- removed_due_to_kge + 1
-    retval
-  })]
-
-  num_centered <- sum(as.numeric(sapply(
-    ests_to_use,
-    function(fn_) {
-      str_split(fn_, "_")[[1]][2] == "centered"
-    }
-  )))
-  cat("clusterable catchment list is done being trimmed. of the initial",
-      length(unique_gridcodes), "available catchments,",
-      removed_due_to_kge, "were removed due to low inferential KGE. of the remaining",  ## nolint
-      length(ests_to_use), "models,", num_centered, "are deseasonalized\n")
-
-  weighted_dist_components <- lapply(names(precomputed_feature_dist_mats),                                                            ## nolint
-                                     function(name_j) {
-                                       feat_mat_j <- precomputed_feature_dist_mats[[name_j]][ests_to_use, ests_to_use, drop = FALSE]  ## nolint
-                                       featwts[[name_j]] * feat_mat_j
-                                     })
-
-  # Function to convert each entry in a matrix to its empirical CDF rank
-  rank_matrix_cdf <- function(mat) {
-    # Validate input
-    if (!is.matrix(mat)) {
-      stop("Input must be a matrix.")
-    }
-    # Flatten the matrix into a vector
-    vals <- as.numeric(mat)
-    # Handle NA values separately
-    if (anyNA(vals)) {
-      warning("NA values detected; they will remain NA in the output.")
-    }
-    # Compute empirical CDF ranks
-    ranks <- rank(vals, ties.method = "average", na.last = "keep") / sum(!is.na(vals))                                                ## nolint
-    # Reshape back to original matrix dimensions
-    result <- matrix(ranks, nrow = nrow(mat), ncol = ncol(mat))
-    result
-  }
-
-  if (comb_func == "test") {
-    plus_mat <- Reduce("+", weighted_dist_components)
-    new_mat <- rank_matrix_cdf(plus_mat)
-    dimnames(new_mat) <- dimnames(plus_mat)
-    return(new_mat) ## nolint
-  } else if (comb_func == "test2") {
-    weighted_dist_components <- lapply(seq_along(weighted_dist_components), function(i) {
-      m_i <- weighted_dist_components[[i]]
-
-      if (any(!is.finite(m_i))) {
-        stop(paste0("ERROR: non-finite values in component", names(weighted_dist_components)[i]))
-      }
-      transf_m_i <- rank_matrix_cdf(m_i)
-      dimnames(transf_m_i) <- dimnames(m_i)
-      as.matrix(transf_m_i)
-    })
-    plus_mat <- Reduce("+", weighted_dist_components)
-    new_mat <- rank_matrix_cdf(plus_mat)
-    dimnames(new_mat) <- dimnames(plus_mat)
-    return(new_mat) ## nolint"
-  } else if (comb_func == "test3") {
-    weighted_dist_components <- lapply(seq_along(weighted_dist_components), function(i) {
-      m_i <- weighted_dist_components[[i]]
-
-      if (any(!is.finite(m_i))) {
-        stop(paste0("ERROR: non-finite values in component", names(weighted_dist_components)[i]))
-      }
-      transf_m_i <- rank_matrix_cdf(m_i)
-      dimnames(transf_m_i) <- dimnames(m_i)
-      as.matrix(transf_m_i)
-    })
-    new_mat <- Reduce("+", weighted_dist_components)
-    return(new_mat) ## nolint"
-  } else if (comb_func == "test4") {
-    plus_mat <- Reduce("+", weighted_dist_components)
-    new_mat <- (0.8 * rank_matrix_cdf(plus_mat)) + (0.2 * plus_mat)
-    dimnames(new_mat) <- dimnames(plus_mat)
-    return(new_mat) ## nolint
-  } else {
-    warning(paste0("invalid comb_func (\"", comb_func, "\") passed to",
-                   "get_pairwise_distance(). Defaulting to \"+\"."))
-    Reduce("+", weighted_dist_components)
-  }
-}
-
 render_beta_and_derived_feats <- function(bvec, plot_data) {
   p <- plot_data
 
@@ -326,102 +207,299 @@ get_beta_plot <- function(model_identifier) {
   obj
 }
 
-
 ###############################################################################
-############################## RUN CLUSTERING #################################
+###################### CLUSTERING ENTRY-POINT #################################
 ###############################################################################
-#' TODO: document this
-get_deseason_bool_vec_from_scheme <- function(scheme_key, threshold = NULL) {                                                         ## nolint
+get_clustering_result <- function(
+  clustering_algorithm,
+  distance_feature_weights,
+  distance_feature_comb_func,
+  deseasonalization_scheme,
+  deseasonalization_cutoff,
+  min_kge_for_inclusion,
+  ignore_negative_beta_ests,
+  clustering_algorithm_params
+) {
+  ## first, calculate deseasonalization boolean for each unique gridcode
   if (debugmode) {
-    threshold_str <- paste0(" and threshold: ", threshold)
-    if (scheme_key %in% c("Everywhere", "Nowhere")) {
-      threshold_str <- ""
-    }
-    cat("running get_deseason_bool_vec_from_scheme() with scheme_key:", scheme_key, threshold_str, "\n")                              ## nolint
+    cat("  > calculating dszn_bool_vec using scheme:",
+        deseasonalization_scheme,
+        "and cutoff:", deseasonalization_cutoff, "\n")
+  }
+  dszn_bool_vec <- get_deseason_bool_vec_from_scheme(
+    scheme_key = deseasonalization_scheme,
+    threshold = deseasonalization_cutoff
+  )
+  if (debugmode) {
+    cat("  > done.", sum(dszn_bool_vec), "of",
+        length(dszn_bool_vec), "models are deseasonalized.\n")
   }
 
+  ## create a list of model identifiers using bool vec above such that there
+  ## is one entry for each unique gridcode we have which is either of the form
+  ## gc_centered or gc_uncentered depending on whether or not deseasonalized
+  ## estimate should be used for that gridcode
+  models_to_consider <- as.vector(sapply(seq_along(dszn_bool_vec), function(idx_) { ## nolint
+    gc_i <- names(dszn_bool_vec)[idx_]
+    dszn_tag_i <- if (dszn_bool_vec[idx_]) "_centered" else "_uncentered"
+    paste0(gc_i, dszn_tag_i)
+  }))
+
+  ## trim our list of model identifiers using min_kge_for_inclusion such that
+  ## only models with an inferential kge above this cutoff are included in
+  ## clustering
+  to_keep <- as.vector(sapply(models_to_consider, function(model_id_) {
+    precomputed_score_df$inf_kge[
+      precomputed_score_df$model_identifier == model_id_
+    ] >= min_kge_for_inclusion
+  }))
+  models_to_use <- models_to_consider[to_keep]
+  if (debugmode) {
+    cat("  > trimming low KGE models. removed",
+        length(to_keep) - sum(to_keep), "of", length(to_keep),
+        "models, leaving", sum(to_keep), "\n")
+  }
+
+  ## further trim our list of models to use such that we ignore any model that
+  ## has more than 5% of parameters negative or any large (>10% the magnitude
+  ## of the largest positive parameter) negative parameter
+  if (ignore_negative_beta_ests) {
+    to_keep <- sapply(models_to_use, function(model_id_) {
+      beta_i_ <- precomputed_beta_matrix[model_id_, ]
+      neg_frac <- sum(beta_i_ < 0) / sum(beta_i_ != 0)
+      largest_neg_rel <- max(c(
+        max(c(abs(beta_i_[beta_i_ < 0]), 0)) / max(c(abs(beta_i_[beta_i_ > 0]), 0)),  ## nolint
+        0
+      ), na.rm = TRUE)
+
+      (neg_frac < 0.05) && (largest_neg_rel < 0.1)
+    })
+    models_to_use <- models_to_use[to_keep]
+    if (debugmode) {
+      cat("  > trimming \'mis-estimated\' models. removed",
+          length(to_keep) - sum(to_keep), "of", length(to_keep),
+          "models, leaving", sum(to_keep), "\n")
+    }
+  }
+
+  ## feed our list of model identifiers along with our distance function params
+  ## (i.e. feature weights and combination function) to get_pairwise_dist_mat
+  if (debugmode) cat("  > calculating distance matrix...\n")
+  dist_mat <- get_pairwise_distance_mtx(
+    model_ids = models_to_use,
+    featwts = distance_feature_weights,
+    comb_func = distance_feature_comb_func
+  )
+  if (debugmode) cat("  > done.\n")
+
+  ## feed our pairwise distance matrix into the clustering algorithm indicated
+  ## by clustering_algorithm parameter and then get a list of labels named by
+  ## the corresponding model identifier
+  labels <- switch(
+    clustering_algorithm,
+    "HDBSCAN" = {
+      if (debugmode) cat("  > running hdbscan clustering...\n")
+      get_hdbscan_labels(
+        dist_mat = dist_mat,
+        n_pts_core = clustering_algorithm_params$n_pts_core,
+        n_pts_clust = clustering_algorithm_params$n_pts_clust
+      )
+    },
+    "Hierarchical" = {
+      if (debugmode) cat("  > running hierarchical clustering...\n")
+      get_hclust_labels(
+        dist_mat = dist_mat,
+        linkage_method = clustering_algorithm_params$linkage_method,
+        n_clusts = clustering_algorithm_params$n_clusts_hclust
+      )
+    },
+    "ChatSlop" = {
+      a <- read.csv("../chatslop/row_clusters.csv")
+      stopifnot(identical(rownames(precomputed_beta_matrix), a$row_name))
+      setNames(a$cluster_k9, a$row_name)
+    }
+  )
+  if (debugmode) {
+    cluster_sizes <- as.vector(
+      sapply(sort(unique(labels[labels != 0])), function(lab_) {
+        paste0(lab_, ":", sum(labels == lab_))
+      })
+    )
+
+    print(cluster_sizes)
+
+    cat("  > clustering finished. \n     num clusters:",
+        length(unique(labels[labels != 0])),
+        "\n     num outliers:", sum(labels == 0),
+        "\n     cluster sizes: (", cluster_sizes, ")\n")
+  }
+
+  ## generate a color key based on whether or not our selected clustering
+  ## algorithm returns labels of 0 to represent outliers or is incapable of
+  ## automatic outlier detection
+  num_non_outlier_clusts <- sum(unique(labels) != 0)
+  cluster_colors <- get_distinct_colors(num_non_outlier_clusts)
+  if (sum(labels == 0) > 0) {
+    cluster_colors <- c("#777777", cluster_colors)
+  }
+  names(cluster_colors) <- as.character(sort(unique(labels)))
+
+  ## return everything
+  list(
+    labels = labels,
+    dist_mat = dist_mat,
+    clust_colors = cluster_colors,
+    all_catchments_considered = models_to_consider
+  )
+}
+
+###############################################################################
+####################### CLUSTERING HELPERS ####################################
+###############################################################################
+#' @param scheme_key is a string explaining when/where to use deseasonalized
+#' model results as opposed to "uncentered" model results. should be one of:
+#' "Everywhere", "Nowhere", "Wherever Meaningfully Better than Uncentered",
+#' or "Wherever not Meaningfully Worse than Uncentered"
+#' @param threshold is a value used for determining what a "meaningful" gap in
+#' performance (inferential KGE) between a centered and uncentered model is
+get_deseason_bool_vec_from_scheme <- function(scheme_key, threshold) {                                                         ## nolint
   if (scheme_key == "Everywhere") {
-    ret_vec <- rep(TRUE, length(unique_gridcodes))
-  } else if (scheme_key == "Nowhere") {
-    ret_vec <- rep(FALSE, length(unique_gridcodes))
-  } else if (scheme_key == "Wherever Meaningfully Better Than Uncentered") {
-    if (is.null(threshold)) {
-      threshold <- 0
-      warning("no threshold provided to get_deseason_bool_vec_from_scheme()\n")
-    }
-
-    centered_indexes <- sapply(precomputed_score_df$model_identifier, function(mid) {                                                 ## nolint
-      str_split(mid, "_")[[1]][2] == "centered"
-    })
-    uncentered_indexes <- sapply(precomputed_score_df$model_identifier, function(mid) {                                               ## nolint
-      str_split(mid, "_")[[1]][2] == "uncentered"
-    })
-
-    stopifnot((sum(centered_indexes) + sum(uncentered_indexes)) == nrow(precomputed_score_df))                                        ## nolint
-
-    centered_kges <- precomputed_score_df$inf_kge[centered_indexes]
-    uncentered_kges <- precomputed_score_df$inf_kge[uncentered_indexes]
-    score_diff <- centered_kges - uncentered_kges
-
-    ret_vec <- score_diff > threshold
-
-  } else if (scheme_key == "Wherever Not Meaningfully Worse Than Uncentered") {
-    if (is.null(threshold)) {
-      threshold <- 0
-      warning("no threshold provided to get_deseason_bool_vec_from_scheme()\n")
-    }
-
-    centered_indexes <- sapply(precomputed_score_df$model_identifier, function(mid) {                                                 ## nolint
-      str_split(mid, "_")[[1]][2] == "centered"
-    })
-    uncentered_indexes <- sapply(precomputed_score_df$model_identifier, function(mid) {                                               ## nolint
-      str_split(mid, "_")[[1]][2] == "uncentered"
-    })
-    stopifnot(length(intersect(centered_indexes, uncentered_indexes)) == 0)
-
-    centered_kges <- precomputed_score_df$inf_kge[centered_indexes]
-    uncentered_kges <- precomputed_score_df$inf_kge[uncentered_indexes]
-    score_diff <- uncentered_kges - centered_kges
-
-    ret_vec <- !(score_diff > threshold)
-
-  } else {
-    stop(paste0("Invalid Deseasonalization Scheme (", scheme_key, ") Passed to get_deseason_bool_vec_from_scheme()"))                 ## nolint
+    return(unlist(setNames(rep(TRUE, length(unique_gridcodes)),
+                           as.character(unique_gridcodes))))
   }
-
-  if (debugmode) {
-    cat("  > returning bool vec that uses", sum(ret_vec), "deseasonalized estimates out of", length(ret_vec), "\n")                   ## nolint
+  if (scheme_key == "Nowhere") {
+    return(unlist(setNames(rep(FALSE, length(unique_gridcodes)),
+                           as.character(unique_gridcodes))))
   }
-  ret_vec
+  if (scheme_key == "Wherever Meaningfully Better Than Uncentered") {
+    return(unlist(setNames(lapply(unique_gridcodes, function(gc_i) {
+      uncent_kge_i <- precomputed_score_df$inf_kge[
+        precomputed_score_df$model_identifier == paste0(gc_i, "_uncentered")
+      ]
+      cent_kge_i <- precomputed_score_df$inf_kge[
+        precomputed_score_df$model_identifier == paste0(gc_i, "_centered")
+      ]
+      cent_kge_i - uncent_kge_i > threshold
+    }), as.character(unique_gridcodes))))
+  }
+  if (scheme_key == "Wherever Not Meaningfully Worse Than Uncentered") {
+    return(unlist(setNames(lapply(unique_gridcodes, function(gc_i) {
+      uncent_kge_i <- precomputed_score_df$inf_kge[
+        precomputed_score_df$model_identifier == paste0(gc_i, "_uncentered")
+      ]
+      cent_kge_i <- precomputed_score_df$inf_kge[
+        precomputed_score_df$model_identifier == paste0(gc_i, "_centered")
+      ]
+      uncent_kge_i - cent_kge_i < threshold
+    }), as.character(unique_gridcodes))))
+  }
+  stop(paste0("Invalid Deseasonalization Scheme (", scheme_key, ") Passed to get_deseason_bool_vec_from_scheme()"))                 ## nolint
 }
 
 #' @param featwts is a vector of scalars by which each component of the overall
 #' distance function should be weighted before combination
 #' @param comb_func is one of "+", "*", "euc" and dictates how the weighted
 #' feature-wise distance components are combined into an overall distance
+#' @param model_ids is a list of model identifiers (names of the cols/rows of
+#' the precomputed distance matrices) to use
+#'
+#' @return a matrix with overall pairwise distances
+get_pairwise_distance_mtx <- function(model_ids, featwts, comb_func) {
+  nfeats <- length(precomputed_feature_dist_mats)
+  if (length(featwts) != nfeats) {
+    warning(paste0("Length of weight vector passed to get_pairwise_distance()",
+                   " not equal to the number of features to weight.",
+                   "  Defaulting to a weight = 1 for each feature. (Mismatch: ",
+                   length(featwts), " vs. ", nfeats, ")"))
+    cat("   > weight names:", names(featwts), "\n",
+        "   > mat names:", names(precomputed_feature_dist_mats), "\n")                                                                ## nolint
+    featwts <- rep(1, nfeats)
+    names(featwts) <- names(precomputed_feature_dist_mats)                                                                            ## nolint
+  }
+
+  weighted_dist_components <- lapply(names(precomputed_feature_dist_mats),                                                            ## nolint
+                                     function(name_j) {
+                                       feat_mat_j <- precomputed_feature_dist_mats[[name_j]][model_ids, model_ids, drop = FALSE]  ## nolint
+                                       featwts[[name_j]] * feat_mat_j
+                                     })
+
+  # helper function which converts every entry in a matrix to its
+  # empirical CDF value across all matrix values
+  rank_matrix_cdf <- function(mat) {
+    # Validate input
+    if (!is.matrix(mat)) {
+      stop("Input must be a matrix.")
+    }
+    # Flatten the matrix into a vector
+    vals <- as.numeric(mat)
+    # Handle NA values separately
+    if (anyNA(vals)) {
+      warning("NA values detected; they will remain NA in the output.")
+    }
+    # Compute empirical CDF ranks
+    ranks <- rank(vals, ties.method = "average", na.last = "keep") / sum(!is.na(vals))                                                ## nolint
+    # Reshape back to original matrix dimensions
+    result <- matrix(ranks, nrow = nrow(mat), ncol = ncol(mat))
+    result
+  }
+
+  if (comb_func == "eCDF(+)") {
+    plus_mat <- Reduce("+", weighted_dist_components)
+    new_mat <- rank_matrix_cdf(plus_mat)
+    dimnames(new_mat) <- dimnames(plus_mat)
+    return(new_mat) ## nolint
+  } else if (comb_func == "eCDF(+(eCDF))") {
+    weighted_dist_components <- lapply(seq_along(weighted_dist_components), function(i) {   ## nolint
+      m_i <- weighted_dist_components[[i]]
+
+      if (any(!is.finite(m_i))) {
+        stop(paste0("ERROR: non-finite values in component", names(weighted_dist_components)[i]))   ## nolint
+      }
+      transf_m_i <- rank_matrix_cdf(m_i)
+      dimnames(transf_m_i) <- dimnames(m_i)
+      as.matrix(transf_m_i)
+    })
+    plus_mat <- Reduce("+", weighted_dist_components)
+    new_mat <- rank_matrix_cdf(plus_mat)
+    dimnames(new_mat) <- dimnames(plus_mat)
+    return(new_mat) ## nolint"
+  } else if (comb_func == "+(eCDF)") {
+    weighted_dist_components <- lapply(seq_along(weighted_dist_components), function(i) {   ## nolint
+      m_i <- weighted_dist_components[[i]]
+
+      if (any(!is.finite(m_i))) {
+        stop(paste0("ERROR: non-finite values in component", names(weighted_dist_components)[i]))   ## nolint
+      }
+      transf_m_i <- rank_matrix_cdf(m_i)
+      dimnames(transf_m_i) <- dimnames(m_i)
+      as.matrix(transf_m_i)
+    })
+    new_mat <- Reduce("+", weighted_dist_components)
+    return(new_mat) ## nolint"
+  } else if (comb_func == "(0.8)eCDF(+) + (0.2)(+)") {
+    plus_mat <- Reduce("+", weighted_dist_components)
+    new_mat <- (0.8 * rank_matrix_cdf(plus_mat)) + (0.2 * plus_mat)
+    dimnames(new_mat) <- dimnames(plus_mat)
+    return(new_mat) ## nolint
+  } else {
+    warning(paste0("invalid comb_func (\"", comb_func, "\") passed to",
+                   "get_pairwise_distance(). Defaulting to \"+\"."))
+    Reduce("+", weighted_dist_components)
+  }
+}
+
+#' @param dist_mat is a pairwise distance matrix with colum/row names based
+#' on model identifiers
 #' @param n_pts_core is the value of k used for density estimation
 #' @param n_pts_clust is the minimum number of points that must populate a
 #' neighborhood in order for it to be labeled as a cluster
-#' @param dszn_bool_vec is a sequence of booleans - one for each unique
-#' gridcode in the dataset - that represents whether the centered estimate
-#' should be used for that gridcode
 #'
 #' @return a named list of labels where the name is the gridcode and the label
 #' is the cluster that the B(s, t) from the relevant gridcode belongs to, where
 #' a label of 0 represents an outlier
-get_hdbscan_labels <- function(featwts,
-                               comb_func,
+get_hdbscan_labels <- function(dist_mat,
                                n_pts_core,
-                               n_pts_clust,
-                               dszn_bool_vec,
-                               kge_thresh = 0) {
-  print(head(dszn_bool_vec))
-
-  dist_mat <- get_pairwise_distance_mtx(featwts = featwts,
-                                        comb_func = comb_func,
-                                        dszn_bool = dszn_bool_vec,
-                                        kge_thresh = kge_thresh)
-
+                               n_pts_clust) {
   ## check dist_mat for any issues
   stopifnot(colnames(dist_mat) == rownames(dist_mat))
   stopifnot(dim(dist_mat)[1] == dim(dist_mat)[2])
@@ -435,30 +513,48 @@ get_hdbscan_labels <- function(featwts,
   )
 
   labels <- clusterer$fit_predict(dist_mat)
-  labels <- labels + 1
-
-  print(length(labels))
-  print(dim(dist_mat))
-
+  labels <- labels + 1 ## adjust for the fact that python uses -1 for outliers
   names(labels) <- colnames(dist_mat)
 
-  if (debugmode) {
-    pdf("./distmatboxplotALL.pdf")
-    boxplot(dist_mat[upper.tri(dist_mat)])
-    dev.off()
 
-    nonoutlier_grids <- names(labels)[labels != 0]
-    temp_mat <- dist_mat[nonoutlier_grids, nonoutlier_grids]
-    pdf("./distmatboxplotNONOUTLIERS.pdf")
-    boxplot(temp_mat[upper.tri(temp_mat)])
-    dev.off()
-
-    cat("clustering finished; num outliers:", sum(labels == 0), "\n")
-  }
-
-  list(labels = labels, dist_mat = dist_mat, dszn_bool_vec = dszn_bool_vec)
+  labels
 }
 
+#' @param dist_mat is a pairwise distance matrix with colum/row names based
+#' on model identifiers
+#' @param linkage_method is a linkage method to be passed to stats::hclust
+#'
+#' @return a named list of labels where the name is the gridcode and the label
+#' is the cluster that the B(s, t) from the relevant gridcode belongs to
+get_hclust_labels <- function(dist_mat,
+                              linkage_method,
+                              n_clusts) {
+  ## check dist_mat for any issues
+  stopifnot(colnames(dist_mat) == rownames(dist_mat))
+  stopifnot(dim(dist_mat)[1] == dim(dist_mat)[2])
+
+  ## check linkage_method for any issues
+  stopifnot(linkage_method %in% c(
+    "complete",
+    "ward.D",
+    "ward.D2",
+    "average",
+    "single",
+    "mcquitty",
+    "median",
+    "centroid"
+  ))
+
+  clust_tree <- hclust(d = as.dist(dist_mat), method = linkage_method)
+  labels <- cutree(tree = clust_tree, k = n_clusts)
+  names(labels) <- colnames(dist_mat)
+
+  labels
+}
+
+###############################################################################
+####################### REPRESENTATIVE CALCULATIONS ###########################
+###############################################################################
 
 #' @param in_cluster_grids is a character vector of gridcodes that form a
 #' cluster
@@ -498,11 +594,14 @@ calculate_medoid_beta <- function(in_cluster_model_ids,
   to_ret
 }
 
+###############################################################################
+######################### COLOR-CODING HELPERS ################################
+###############################################################################
+
 #' @param n is the number of maximally distinct colors
 #' to generate; must be at least 2
 #'
 #' @return a character vector of hex colors of length n
-#' where the first color is grey (for outliers)
 get_distinct_colors <- function(n) {
   floor_val <- 0.3
   top_val <- 1
@@ -515,19 +614,19 @@ get_distinct_colors <- function(n) {
       rgb(interp_pts[h], interp_pts[h], 0),
       rgb(0, interp_pts[h], interp_pts[h]))
   }))
-  c("#6e6e6e", color_palette_overbuilt[seq_len(n - 1)])
+  color_palette_overbuilt[seq_len(n)]
 }
 
 #' @param scores is a set of numeric values to map to the Red -> Grey -> Green
-#' color pallete based on their value
+#' color pallete based on their value (increasing)
 #' @param threshold_value is a single number separating "good" values (above
 #' threshold) from "bad" values (below threshold)
 #' @param zero_color_wb_frac is a number between 0 (black) and 1 (white) which
 #' dictates how close to pure white the grey color representing the threshold
 #' value should be
 #'
-#' @return a vector of hex color codes containing a color mapped from the
-#' relevant value of
+#' @return a vector of hex color codes in the same order as scores where each
+#' entry is the color mapping of the corresponding value in scores
 map_scores_to_rg_pal <- function(scores,
                                  threshold_value,
                                  zero_color_wb_frac = 0.92) {
