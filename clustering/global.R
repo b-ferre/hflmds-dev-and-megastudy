@@ -12,6 +12,8 @@ library(ggplotify)
 library(patchwork)
 library(bslib)
 library(reticulate)
+library(sf)
+library(dplyr)
 
 source("shared_helpers.R")
 
@@ -347,7 +349,9 @@ get_clustering_result <- function(
   deseasonalization_cutoff,
   min_kge_for_inclusion,
   ignore_negative_beta_ests,
-  clustering_algorithm_params
+  clustering_algorithm_params,
+  outlier_thresh,
+  outlier_neighbor_index
 ) {
   ## first, calculate deseasonalization boolean for each unique gridcode
   if (debugmode) {
@@ -420,6 +424,38 @@ get_clustering_result <- function(
     comb_func = distance_feature_comb_func
   )
   if (debugmode) cat("  > done.\n")
+
+  ## if indicated, pre-trim any outliers with k-neighbor distances
+  ## in the upper outlier_thresh quantile
+  if (outlier_thresh > 0) {
+    if (debugmode) {
+      cat(
+        "  > trimming catchments with",
+        paste0(outlier_neighbor_index, "-neighbor"), "distance",
+        "in the top", paste0((1 - outlier_thresh) * 100, "% of all"),
+        paste0(outlier_neighbor_index, "-neighbor"), "distances...\n"
+      )
+    }
+
+    neighbor_dists <- apply(X = dist_mat, MARGIN = 1, FUN = function(d_i) {
+      sort(d_i, partial = outlier_neighbor_index)[outlier_neighbor_index]
+    })
+
+    cutoff <- quantile(neighbor_dists, 1 - outlier_thresh)
+    keep <- neighbor_dists < cutoff
+
+    pdf("CHECK.pdf")
+    boxplot(neighbor_dists)
+    abline(h = cutoff, col = "red", lty = 2)
+    dev.off()
+
+    n_keep <- sum(keep)
+    if (debugmode) {
+      cat("  > done. removed", length(keep) - n_keep, "catchments\n")
+    }
+
+    dist_mat <- dist_mat[keep, keep, drop = FALSE]
+  }
 
   ## feed our pairwise distance matrix into the clustering algorithm indicated
   ## by clustering_algorithm parameter and then get a list of labels named by
@@ -792,4 +828,81 @@ map_scores_to_rg_pal <- function(scores,
   )
 
   colors
+}
+
+#' TODO: document this
+#' heatmap grid and preset radius in km
+generate_heatmap_layer <- function(catchments_sf,
+                                   heatmap_grid_size_km,
+                                   preset_radius_km = 500) {
+
+  if (debugmode) cat("HEATMAP: heatmap_grid_size_km:", heatmap_grid_size_km, "\n")                  ## nolint
+  if (debugmode) cat("HEATMAP: heatmap_trim_radius_km:", preset_radius_km, "\n")                    ## nolint
+
+  heatmap_grid_size <- heatmap_grid_size_km * 1000
+  preset_radius <- preset_radius_km * 1000
+
+  MAX_OPACITY <- 0.7  ## corresponds to areas that are 100% dominated by one cluster                ## nolint
+  MIN_OPACITY <- 0.3  ## corresponds to areas that are equally populated by two or more clusters    ## nolint
+
+  ## project coords to mercator for calculations
+  catchments_sf <- st_transform(catchments_sf, 3857)
+
+  ## mask out areas where there are insufficient number of catchments
+  boundary_mask <- st_union(st_buffer(catchments_sf, dist = preset_radius))
+
+  if (heatmap_grid_size == 0) {
+    # when heatmap_grid_size is set to 0, it should just be a clipped
+    # vornoi diagram centered around our catchments
+    points_merged <- do.call(c, st_geometry(catchments_sf))
+    voronoi_polys <- st_collection_extract(st_voronoi(points_merged))
+
+    poly_data <- st_sf(geometry = voronoi_polys) |>
+      st_join(catchments_sf) |>
+      mutate(
+        majority_cluster = cluster,
+        opacity = MAX_OPACITY
+      )
+  } else {
+    # generate the grid of cells to look at using hex grid (looks better)
+    grid_polys <- st_make_grid(
+      catchments_sf,
+      cellsize = heatmap_grid_size,
+      square = FALSE
+    )
+    grid_sf <- st_sf(poly_id = seq_along(grid_polys), geometry = grid_polys)
+
+    # attach spatial data to grid polygons
+    grid_pts <- st_join(catchments_sf, grid_sf)
+
+    # for each grid point, calculate which cluster dominates and by how much
+    poly_stats <- grid_pts |>
+      st_drop_geometry() |>
+      group_by(poly_id, cluster) |>                                                 ## nolint
+      summarise(n = n(), .groups = "drop") |>
+      group_by(poly_id) |>
+      arrange(desc(n)) |>
+      summarise(
+        total_catchments = sum(n),
+        majority_cluster = first(cluster),
+        count_1st = first(n),
+        count_2nd = nth(n, 2, default = 0)
+      ) |>
+      mutate(
+        margin_ratio = (count_1st - count_2nd) / total_catchments,                  ## nolint
+        opacity = MIN_OPACITY + (margin_ratio * (MAX_OPACITY - MIN_OPACITY))        ## nolint
+      )
+
+    poly_data <- grid_sf |>
+      left_join(poly_stats, by = "poly_id") |>
+      filter(!is.na(majority_cluster))                                              ## nolint
+  }
+
+  # clip polygons to boundaries
+  final_heatmap <- st_intersection(poly_data, boundary_mask)
+
+  ## convert final object back to WSG84 for leaflet rendering
+  final_heatmap <- st_transform(final_heatmap, 4326)
+
+  final_heatmap
 }

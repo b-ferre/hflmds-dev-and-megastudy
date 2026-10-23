@@ -6,7 +6,8 @@ shinyServer(function(input, output, session) {
   cluster_rep_cache <- reactiveVal()
   selected_representative <- reactiveVal(list(cluster = "", type = ""))
 
-  ## render a map based on the most recent clustering result
+  ## render a catchment-scale map based on the most recent clustering result
+  ## this should be the second thing that runs after a new clust result returns
   observeEvent(list(
     clustering_result(),
     input$hide_outliers_toggle,
@@ -109,7 +110,100 @@ shinyServer(function(input, output, session) {
     })
 
     cat("SERVER: map construction finished...\n")
-  }, ignoreInit = TRUE, priority = 0)
+  }, ignoreInit = TRUE, priority = 9)
+
+  ## render a heatmap based on the most recent clustering result
+  ## this should be the third thing that runs after a new clust result returns
+  observeEvent(list(
+    clustering_result(),
+    input$hide_outliers_toggle,
+    input$heatmap_grid_size
+  ), {
+    cat("SERVER: rebuilding heatmap...\n")
+
+    clust_res <- clustering_result()
+    req(clust_res)
+
+    labels <- clust_res$labels
+    clust_colors <- clust_res$clust_colors
+    clustered_catchments <- names(labels)
+
+    ## first, get a df of all considered catchments (even those with
+    ## insufficient performance to be used for clustering)
+    map_df <- map_data
+    map_df <- map_data[map_df$model_identifier %in% clustered_catchments, ]
+
+    map_df$cluster <- as.numeric(unname(
+      labels[as.character(map_df$model_identifier)]
+    ))
+
+    stopifnot(!anyNA(map_df$cluster))
+    stopifnot(!any(duplicated(as.vector(sapply(map_df$model_identifier, function(id_) { # nolint
+      str_split(id_, "_")[[1]][1]
+    })))))
+
+    if (debugmode) cat("SERVER: about to call generate_heatmap_layer()...\n")
+    heatmap_sf_object <- generate_heatmap_layer(
+      ## the CRS I use here corresponds to WGS84 coords. ## TODO: make sure this aligns with metadata ## nolint
+      catchments_sf = st_as_sf(map_df, coords = c("longitude", "latitude"), crs = 4326),              ## nolint
+      heatmap_grid_size_km = (10 ** input$heatmap_grid_size)
+    )
+    if (debugmode) cat("SERVER: done.\n")
+
+    heatmap_pal <- colorFactor(
+      palette = unname(clust_colors),
+      domain = names(clust_colors)
+    )
+
+    output$clustering_heatmap <- renderLeaflet({
+      cat("HEATMAP: renderer started\n")
+
+      hm <- heatmap_sf_object
+      hm <- hm[!sf::st_is_empty(hm), ]
+
+      cat("HEATMAP: nonempty features =", nrow(hm), "\n")
+      validate(need(nrow(hm) > 0, "Heatmap contains no nonempty geometries."))
+
+      print(sf::st_bbox(hm))
+      print(table(sf::st_geometry_type(hm)))
+      print(table(hm$majority_cluster, useNA = "ifany"))
+      print(summary(hm$opacity))
+
+      # Use the existing named cluster colours directly.
+      hm$fill_colour <- unname(
+        clust_colors[as.character(hm$majority_cluster)]
+      )
+
+      validate(need(
+        !anyNA(hm$fill_colour),
+        "Some heatmap clusters have no matching colour."
+      ))
+
+      bb <- sf::st_bbox(hm)
+
+      result <- leaflet(hm) |>
+        addTiles() |>
+        addPolygons(
+          fillColor = ~fill_colour,
+          fillOpacity = 0.8,
+          stroke = TRUE,
+          color = "#333333",
+          weight = 1,
+          group = "HeatmapLayer"
+        ) |>
+        fitBounds(
+          lng1 = unname(bb["xmin"]),
+          lat1 = unname(bb["ymin"]),
+          lng2 = unname(bb["xmax"]),
+          lat2 = unname(bb["ymax"])
+        )
+
+      cat("HEATMAP: widget constructed\n")
+      result
+    })
+
+    cat("SERVER: heatmap construction finished...\n")
+  }, ignoreInit = TRUE, priority = 8)
 
   ## handle map marker clicks and popup graph displays
   observeEvent(input$clustering_map_marker_click, {
@@ -423,6 +517,12 @@ shinyServer(function(input, output, session) {
 
     ignore_negative_betas <- input$remove_negative_beta_ests
 
+    outlier_thresh <- input$pre_clust_outlier_trim
+    req(outlier_thresh)
+
+    outlier_neighbor_index <- input$pre_clust_outlier_neighbor_index
+    req(outlier_neighbor_index)
+
     new_clustering_res <- get_clustering_result(
       clustering_algorithm = clust_algo,
       distance_feature_weights = featwts,
@@ -431,7 +531,9 @@ shinyServer(function(input, output, session) {
       deseasonalization_cutoff = dszn_cutoff,
       min_kge_for_inclusion = min_kge_for_clust,
       ignore_negative_beta_ests = ignore_negative_betas,
-      clustering_algorithm_params = algo_hyperparams
+      clustering_algorithm_params = algo_hyperparams,
+      outlier_thresh = outlier_thresh,
+      outlier_neighbor_index = outlier_neighbor_index
     )
 
     if (debugmode) cat("SERVER: clustering finished\n")

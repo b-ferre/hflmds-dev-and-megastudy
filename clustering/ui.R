@@ -176,6 +176,16 @@ shinyUI(fluidPage(
             choices = c("HDBSCAN", "Hierarchical"),
             selected = INITCLUSTERSETTINGS$clust_algo
           ),
+          sliderInput(
+            inputId = "pre_clust_outlier_trim",
+            label = "Pre-Clustering Outlier Filtering Quantile",
+            min = 0, max = 1, value = 0.3, step = 0.01
+          ),
+          sliderInput(
+            inputId = "pre_clust_outlier_neighbor_index",
+            label = "Pre-Clustering Outlier Filtering Neighbor Index",
+            min = 2, max = 10, value = 2, step = 1
+          )
         ),
         ## other params (dist comb, kge threshing, and dszn regime)
         accordion_panel(
@@ -225,6 +235,13 @@ shinyUI(fluidPage(
         accordion_panel(
           "Display Options",
           fluidRow(
+            sliderInput(
+              inputId = "heatmap_grid_size",
+              label = "Heatmap Grid Size (km, Log Base 10 Scale)",
+              min = 0, max = 5, value = 3, step = 0.01
+            )
+          ),
+          fluidRow(
             selectInput(
               inputId = "coloring_regime",
               label = "Coloring Scheme",
@@ -268,7 +285,18 @@ shinyUI(fluidPage(
     ),
     ## main panel containing map of catchments and representatives
     mainPanel = mainPanel(
-      fluidRow(leafletOutput("clustering_map", height = 500)),
+      tabsetPanel(
+        tabPanel(
+          title = "Catchment-Wise Cluster Visualizer",
+          fluidRow(leafletOutput("clustering_map", height = 500))
+        ),
+        tabPanel(
+          title = "Cluster Heatmap Visualizer",
+          fluidRow(
+            leafletOutput("clustering_heatmap", height = 500)
+          )
+        )
+      ),
       fluidRow(
         column(uiOutput("cluster_rep_area"), width = 12)
       )
