@@ -1,13 +1,21 @@
+tryCatch(expr = setwd("./distance function dev"), error = function(e) {})
+
 library(signal)
 library(stats)
 library(bssm)
-source("./clustering/shared_helpers.R")
+source("../clustering/shared_helpers.R")
 
 if (!exists("beta_mat")) {
-  beta_mat <- readRDS("./clustering/precomputed_beta_mtx.rds")
+  beta_mat <- readRDS("../clustering/precomputed_beta_mtx.rds")
 }
 
-example_strings <- list("4976_centered", "1126_uncentered", "5337_uncentered")
+example_strings <- list(
+  "4976_centered",
+  "1126_uncentered",
+  "5337_uncentered",
+  "5016_uncentered",
+  "2606_uncentered"
+)
 
 example_betas <- lapply(example_strings, function(id) beta_mat[id, ])
 
@@ -32,7 +40,7 @@ smooth_delta_sg_iter <- function(dvec, n_iter = 30, obl_size = 35, smooth_window
   dvec
 }
 
-smooth_delta_fast_spline <- function(dvec, obl_size = 35, smooth_penalty = 0.8) { ## nolint
+smooth_delta_fast_spline <- function(dvec, obl_size = global_obl_size, smooth_penalty = 0.8) { ## nolint
   # 1. Remove spikes once
   dvec_no_spike <- stats::runmed(dvec, k = obl_size)
 
@@ -46,7 +54,7 @@ smooth_delta_fast_spline <- function(dvec, obl_size = 35, smooth_penalty = 0.8) 
   dvec_smooth
 }
 
-smooth_delta_fast_gaussian <- function(dvec, obl_size = 35, sigma = 20) {
+smooth_delta_fast_gaussian <- function(dvec, obl_size = global_obl_size, sigma = global_smoothing_window) { ## nolint
   front_pad_len <- (3 * sigma) - 1
   back_pad_len <- (3 * sigma)
 
@@ -76,6 +84,25 @@ smooth_delta_fast_gaussian <- function(dvec, obl_size = 35, sigma = 20) {
   as.numeric(dvec_smooth)
 }
 
+smooth_delta_experimental <- function(dvec, obl_size = global_obl_size, window_size = global_smoothing_window, round_after = TRUE) {    ## nolint
+  ## first, obliterate short-lived spikes
+  dvec <- runmed(dvec, obl_size)
+
+  ## do rolling average - assuming that dvec is cyclical
+  weights <- rep(1, window_size) / window_size
+  dvec <- stats::filter(dvec, weights, method = "convolution", sides = 2, circular = TRUE)  ## nolint
+
+  stopifnot(!any(is.na(dvec)))
+
+  ## re-round the rolling average ??
+  if (round_after) dvec <- floor(dvec)
+
+  dvec
+}
+
+global_smoothing_window <- 71
+global_obl_size <- 35
+
 for (example_index in seq_along(example_strings)) {
   beta_id <- example_strings[[example_index]]
 
@@ -83,12 +110,22 @@ for (example_index in seq_along(example_strings)) {
 
   pdf(paste0("smoothing_vis_id_", beta_id, ".pdf"))
 
-  plot(delta_vec, type = "l")
+  plot(delta_vec, type = "l", col = "blue")
   lines(smooth_delta_sg_iter(delta_vec), col = "red")
-  lines(smooth_delta_fast_spline(delta_vec, smooth_penalty = 0.8), col = "blue")
-  lines(smooth_delta_fast_spline(delta_vec, smooth_penalty = 0.95), col = "green") ## nolint
-  lines(smooth_delta_fast_gaussian(delta_vec, sigma = 20), col = "purple") ## nolint
-  lines(smooth_delta_fast_gaussian(delta_vec, sigma = 50), col = "yellow") ## nolint
+  lines(smooth_delta_experimental(delta_vec), col = "green")
+  lines(smooth_delta_experimental(delta_vec, round_after = FALSE), col = "purple")  ## nolint
+
+  legend(
+    "bottomleft",
+    legend = c(
+      "Base Vector",
+      "Current Smoothing Func",
+      "Experimental (Rounded)",
+      "Experimental (Unrounded)"
+    ),
+    col = c("blue", "red", "green", "purple"),
+    lty = 1
+  )
 
   dev.off()
 }

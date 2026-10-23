@@ -117,10 +117,11 @@ shinyServer(function(input, output, session) {
     req(input$clustering_map_marker_click$id)
     clicked_gridcode <- as.character(input$clustering_map_marker_click$id)
 
-    beta_plot <- get_beta_plot(clicked_gridcode)
+    rendered_beta_plot <- get_rendered_beta_plot(clicked_gridcode)
 
     output$beta_popup_plot <- renderPlot({
-      beta_plot
+      grid::grid.newpage()
+      grid::grid.draw(rendered_beta_plot)
     })
 
     showModal(modalDialog(
@@ -192,36 +193,33 @@ shinyServer(function(input, output, session) {
   }, ignoreInit = TRUE)
 
   ## render (& reactively re-render) color scheme selection UI
-  ## high priority so that this runs before any map recoloring that
-  ## relies on kge_goodness_thresh
-  observeEvent(input$coloring_regime, {
+  output$coloring_regime_tuner_UI <- renderUI({
     if (debugmode) cat("SERVER: running color scheme tuning UI update with coloring_regime:", input$coloring_regime, "\n")  ## nolint
 
     if (input$coloring_regime != "Cluster Membership") {
-      output$coloring_regime_tuner_UI <- renderUI({
-        fluidRow(
-          sliderInput(
-            inputId = "kge_goodness_thresh",
-            label = "Break Point Between Bad (Red) and Good (Green) Values of Selected Coloring Feature", ## nolint
-            min = 0,
-            max = 1,
-            value = 0.2,
-            step = 0.05
-          )
+      fluidRow(
+        sliderInput(
+          inputId = "kge_goodness_thresh",
+          label = "Break Point Between Bad (Red) and Good (Green) Values of Selected Coloring Feature", ## nolint
+          min = 0,
+          max = 1,
+          value = 0.2,
+          step = 0.05
         )
-      })
+      )
     } else {
-      output$coloring_regime_tuner_UI <- renderUI({
-        fluidRow(
-          checkboxInput(
-            inputId = "hide_outliers_toggle",
-            label = "Hide Outliers",
-            value = TRUE
-          )
+      fluidRow(
+        checkboxInput(
+          inputId = "hide_outliers_toggle",
+          label = "Hide Outliers",
+          value = TRUE
         )
-      })
+      )
     }
-  }, ignoreInit = FALSE, priority = 100)
+  })
+  ## make sure that opening the display option accordion panel doesn't
+  ## trigger an update for the dynamic UI and cause random map rerendering
+  outputOptions(output, "coloring_regime_tuner_UI", suspendWhenHidden = FALSE)
 
   ## observe selected_rep_type (built inside of UI above)
   ## and keep selected_representative up to date
@@ -315,14 +313,16 @@ shinyServer(function(input, output, session) {
         rep_cache_key <- paste0(rep_info$type, rep_info$cluster)
         if (rep_cache_key %in% names(current_rep_cache)) {                                                                           ## nolint
           if (debugmode) cat("SERVER: loading rep with key \"", rep_cache_key, "\" from cache...\n")                            ## nolint
-          output$representative_plot_display <- renderPlot(
-            render_beta_and_derived_feats(
-              current_rep_cache[[paste0(rep_info$type, rep_info$cluster)]],
-              plot_beta_and_derived_feats(
-                current_rep_cache[[paste0(rep_info$type, rep_info$cluster)]]
-              )
+          plt <- render_beta_and_derived_feats(
+            current_rep_cache[[paste0(rep_info$type, rep_info$cluster)]],
+            plot_beta_and_derived_feats(
+              current_rep_cache[[paste0(rep_info$type, rep_info$cluster)]]
             )
           )
+          output$representative_plot_display <- renderPlot({
+            grid::grid.newpage()
+            grid::grid.draw(plt)
+          })
         } else {
           in_cluster_grids_i <- as.vector(names(res_i$labels)[res_i$labels == rep_info$cluster])                        ## nolint
           if (rep_info$type == "Medoid") {
@@ -333,14 +333,16 @@ shinyServer(function(input, output, session) {
             )
             current_rep_cache[[paste0(rep_info$type, rep_info$cluster)]] <- new_rep                                     ## nolint
             cluster_rep_cache(current_rep_cache)
-            output$representative_plot_display <- renderPlot(
-              render_beta_and_derived_feats(
-                new_rep,
-                plot_beta_and_derived_feats(
-                  new_rep
-                )
+            plt <- render_beta_and_derived_feats(
+              new_rep,
+              plot_beta_and_derived_feats(
+                new_rep
               )
             )
+            output$representative_plot_display <- renderPlot({
+              grid::grid.newpage()
+              grid::grid.draw(plt)
+            })
           } else if (rep_info$type == "Median") {
             new_rep <- calculate_median_beta(
               in_cluster_model_ids = in_cluster_grids_i,
@@ -348,14 +350,16 @@ shinyServer(function(input, output, session) {
             )
             current_rep_cache[[paste0(rep_info$type, rep_info$cluster)]] <- new_rep                                     ## nolint
             cluster_rep_cache(current_rep_cache)
-            output$representative_plot_display <- renderPlot(
-              render_beta_and_derived_feats(
-                new_rep,
-                plot_beta_and_derived_feats(
-                  new_rep
-                )
+            plt <- render_beta_and_derived_feats(
+              new_rep,
+              plot_beta_and_derived_feats(
+                new_rep
               )
             )
+            output$representative_plot_display <- renderPlot({
+              grid::grid.newpage()
+              grid::grid.draw(plt)
+            })
           } else {
             stop("invalid representative type (",
                  rep_info$type,

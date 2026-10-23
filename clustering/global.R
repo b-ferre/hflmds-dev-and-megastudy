@@ -105,7 +105,7 @@ unique_gridcodes <- unique(
 )
 
 ###############################################################################
-############################# HELPER FUNCTIONS ################################
+######################## RANDOM HELPER FUNCTIONS ##############################
 ###############################################################################
 
 ## convert a boolean representing whether the centered
@@ -141,26 +141,154 @@ get_inf_r2 <- function(gridcode, dszn_bool) {
   round(precomputed_score_df$inf_r2[precomputed_score_df$model_identifier == paste0(gridcode, "_", to_dszn_key(dszn_bool))], 4)       ## nolint
 }
 
+###############################################################################
+######################### PLOTTING HELPERS ####################################
+###############################################################################
+#' @param bvec is a flattened, lag-minor indexed vector of B(s, t) coefficients
+#' @param title is a string to display above the levelplot as a plot title
+#' @param ncolors is the number of unique non-white colors to use in the palette
+#'
+#' @return a levelplot() object of B(s, t) values with x = day and y = lag and
+#' optionally, the vectors for smooth_delta and delta overlayed
+plot_beta <- function(
+  bvec, title = "", ncolors = 20, m = 364, max_lag = 150,
+  delta = NULL, smooth_delta = NULL
+) {
+  bgrid <- cbind(expand.grid(s = seq_len(max_lag), t = seq_len(m + 1)), b = bvec)           ## nolint
+  dvec <- calculate_delta(bvec)
+
+  # truncate matrix to avoid plotting tens of lags with B(s, t) = 0
+  cutoff <- min(ceiling(max(dvec) / 10) * 10, max_lag)
+  bgrid <- bgrid[bgrid$s <= cutoff, , drop = FALSE]
+
+  # Generate colour key: smallest magnitudes are still distinct from white
+  blue_pal <- function(n) {
+    colorRampPalette(c("#d5ddfe", "#6ca4fe", "#2159e7"))(n)
+  }
+  red_pal <- function(n) {
+    colorRampPalette(c("#f9aa98", "#d85a5e", "#67000D"))(n)
+  }
+
+  has_pos <- any(bgrid$b > 0)
+  has_neg <- any(bgrid$b < 0)
+
+  if (has_pos && !has_neg) {
+    cols <- blue_pal(ncolors)
+    at_vals <- seq(0, max(bgrid$b), length.out = ncolors + 1)
+
+  } else if (!has_pos && has_neg) {
+    cols <- rev(red_pal(ncolors))
+    at_vals <- seq(min(bgrid$b), 0, length.out = ncolors + 1)
+
+  } else if (has_pos && has_neg) {
+    rp <- max(bgrid$b)
+    rn <- abs(min(bgrid$b))
+
+    # Ensure both signs receive at least one colour
+    ncolors <- max(2L, ncolors)
+    nb <- max(1L, min(ncolors - 1L, round(ncolors * rp / (rp + rn))))
+    nr <- ncolors - nb
+
+    cols <- c(rev(red_pal(nr)), blue_pal(nb))
+    at_vals <- c(
+      seq(-rn, 0, length.out = nr + 1),
+      seq(0, rp, length.out = nb + 1)[-1]
+    )
+
+  } else {
+    cols <- "#FFFFFF"
+    at_vals <- c(-1, 1)
+  }
+
+  bgrid$b[bgrid$b == 0] <- NA_real_
+
+  line_cols <- c("Raw delta" = "#E69F00", "Smoothed delta" = "#222222")
+  line_types <- c(2, 1)
+
+  # Strip ts/matrix attributes before plotting.
+  if (!is.null(delta)) delta <- as.numeric(delta)
+  if (!is.null(smooth_delta)) smooth_delta <- as.numeric(smooth_delta)
+
+  lattice::levelplot(
+    b ~ t * s,
+    data = bgrid,
+    col.regions = cols,
+    at = at_vals,
+    xlab = list("Day of the year", cex = 1.4),
+    ylab = list("Lag (Days)", cex = 1.4),
+    scales = list(cex = 1.2),
+    colorkey = list(axis.text = list(cex = 1.2)),
+    aspect = "xy",
+    main = title,
+
+    panel = function(...) {
+      # Draw the surface first, then overlay the lines.
+      lattice::panel.levelplot(...)
+
+      if (!is.null(delta)) {
+        delta <- delta + 0.5
+        lattice::panel.lines(
+          x = seq_along(delta),
+          y = as.numeric(delta),
+          col = line_cols[1],
+          lty = line_types[1],
+          lwd = 2
+        )
+      }
+
+      if (!is.null(smooth_delta)) {
+        smooth_delta <- smooth_delta + 0.5
+        lattice::panel.lines(
+          x = seq_along(smooth_delta),
+          y = as.numeric(smooth_delta),
+          col = line_cols[2],
+          lty = line_types[2],
+          lwd = 2
+        )
+      }
+    },
+
+    key = if (!is.null(delta) || !is.null(smooth_delta)) {
+      present <- c(!is.null(delta), !is.null(smooth_delta))
+
+      list(
+        space = "bottom",
+        columns = sum(present),
+        text = list(names(line_cols)[present]),
+        lines = list(
+          col = unname(line_cols[present]),
+          lty = line_types[present],
+          lwd = 2
+        )
+      )
+    } else {
+      NULL
+    }
+  )
+}
+
 render_beta_and_derived_feats <- function(bvec, plot_data) {
   p <- plot_data
 
-  beta_plot <- ggplotify::as.ggplot(
-    plot_beta(    ## nolint
-      bvec,
-      title = "Beta Surface",
-      ncolors = p$ncolors,
-      m = p$m,
-      max_lag = p$max_lag
-    )
+  beta_plot <- plot_beta(
+    bvec,
+    title = "Beta Surface and Delta Vectors",
+    ncolors = p$ncolors,
+    m = p$m,
+    max_lag = p$max_lag,
+    delta = p$delta,
+    smooth_delta = p$smooth_delta
   )
 
   make_line_plot <- function(values, title, ymax) {
-    # Avoid a zero-height plotting range
     if (!is.finite(ymax) || ymax <= 0) ymax <- 1
 
     ggplot(
-      data.frame(day = seq_along(values), value = values),
-      aes(x = day, y = value) ## nolint
+      data.frame(
+        day = seq_along(values),
+        value = as.numeric(values)
+      ),
+      aes(x = day, y = value)
     ) +
       geom_line() +
       coord_cartesian(ylim = c(0, ymax)) +
@@ -168,29 +296,30 @@ render_beta_and_derived_feats <- function(bvec, plot_data) {
       theme(plot.title = element_text(hjust = 0.5))
   }
 
-  d_plot <- make_line_plot(
-    p$delta, "Delta Vector", p$max_delta
-  )
-  smooth_d_plot <- make_line_plot(
-    as.numeric(unname(p$smooth_delta)), "Smoothed Delta Vector", p$max_delta
-  )
   tt_plot <- make_line_plot(
     p$total_transfer, "Total Transfer Vector", p$max_tt
   )
+
   sme_plot <- make_line_plot(
     p$max_effective_lag, "Maximally Effective Lag", p$max_sme
   )
 
-  combined <- (
-    beta_plot + (d_plot / smooth_d_plot / tt_plot / sme_plot)
-  ) +
-    patchwork::plot_layout(widths = c(2, 1))
+  combined <- gridExtra::arrangeGrob(
+    beta_plot,
+    tt_plot,
+    sme_plot,
+    layout_matrix = rbind(
+      c(1, 2),
+      c(1, 3)
+    ),
+    widths = c(2, 1),
+    top = p$title
+  )
 
-  obj <- combined + patchwork::plot_annotation(title = p$title)
-  obj
+  combined
 }
 
-get_beta_plot <- function(model_identifier) {
+get_rendered_beta_plot <- function(model_identifier) {
   bvec <- precomputed_beta_matrix[as.character(model_identifier), ]
 
   plot_data <- NULL
@@ -208,7 +337,7 @@ get_beta_plot <- function(model_identifier) {
 }
 
 ###############################################################################
-###################### CLUSTERING ENTRY-POINT #################################
+###################### MAIN CLUSTERING ENTRY-POINT ############################
 ###############################################################################
 get_clustering_result <- function(
   clustering_algorithm,
@@ -320,9 +449,6 @@ get_clustering_result <- function(
         paste0(lab_, ":", sum(labels == lab_))
       })
     )
-
-    print(cluster_sizes)
-
     cat("  > clustering finished. \n     num clusters:",
         length(unique(labels[labels != 0])),
         "\n     num outliers:", sum(labels == 0),
@@ -350,7 +476,8 @@ get_clustering_result <- function(
 
 ###############################################################################
 ####################### CLUSTERING HELPERS ####################################
-###############################################################################
+###############################################################################\
+
 #' @param scheme_key is a string explaining when/where to use deseasonalized
 #' model results as opposed to "uncentered" model results. should be one of:
 #' "Everywhere", "Nowhere", "Wherever Meaningfully Better than Uncentered",
@@ -665,91 +792,4 @@ map_scores_to_rg_pal <- function(scores,
   )
 
   colors
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-##############################################
-## ARCHIVE
-##############################################
-#' @param gridcode is the gridcode of the catchment to load a B(s, t) plot of
-#'
-#' @return a levelplot() object of the B(s, t) derived from the catchment with
-#' the provided gridcode
-get_beta_plot_OLD <- function(gridcode, dszn_bool) {                                                                  ## nolint
-  if (exists("precomputed_beta_plots")) {
-    if (as.character(gridcode) %in% names(precomputed_beta_plots[[to_dszn_key(dszn_bool)]])) {                        ## nolint
-      print("pulling plot from precompute...")
-      all_plots <- precomputed_beta_plots[[to_dszn_key(dszn_bool)]][[as.character(gridcode)]]                         ## nolint
-
-      ## compile these into one plot object and return it
-      combined_plot <- all_plots$bplot + (all_plots$dplot / all_plots$ttplot / all_plots$smeplot) + plot_layout(widths = c(2, 1))                                   ## nolint
-
-      final_ggplot <- combined_plot +
-        plot_annotation(title = all_plots$overall_title_string)
-
-      return(as.ggplot(final_ggplot))
-    } else {
-      warning("no precomputed plot was found for requested gridcode. building from scratch...")                       ## nolint
-    }
-  } else {
-    warning("precomputed_beta_plots was not loaded. applet will experience significant latency.")                     ## nolint
-  }
-
-  plot_beta_and_derived_feats(get_beta(gridcode, dszn_bool))                                                                            ## nolint
-}
-
-
-#' @param featwts is a vector of scalars by which each component of the overall
-#' distance function should be weighted before combination
-#' @param comb_func is one of "+", "*", "euc" and dictates how the weighted
-#' feature-wise distance components are combined into an overall distance
-#' @param minpts is a scalar which dictates how many members must exist within
-#' a given neighborhood in order to be considered a cluster
-#'
-#' @return a named list of labels where the name is the gridcode and the label
-#' is the cluster that the B(s, t) from the relevant gridcode belongs to, where
-#' a label of 0 represents an outlier
-get_hdbscan_labels_OLD <- function(featwts, comb_func, minpts, dszn_bool) {   ## nolint
-  dist_mat <- get_pairwise_distance_mtx(featwts = featwts,
-                                        comb_func = comb_func,
-                                        dszn_bool = dszn_bool)
-
-  ## check dist_mat for any issues
-  stopifnot(colnames(dist_mat) == rownames(dist_mat))
-  stopifnot(dim(dist_mat)[1] == dim(dist_mat)[2])
-
-  ## run hdbscan
-  fit <- dbscan::hdbscan(as.dist(dist_mat), minPts = minpts)
-
-  ## extract and name labels
-  labels <- fit$cluster
-  names(labels) <- colnames(dist_mat)
-
-  if (debugmode) {
-    pdf("./distmatboxplotALL.pdf")
-    boxplot(dist_mat[upper.tri(dist_mat)])
-    dev.off()
-
-    nonoutlier_grids <- names(labels)[labels != 0]
-    temp_mat <- dist_mat[nonoutlier_grids, nonoutlier_grids]
-    pdf("./distmatboxplotNONOUTLIERS.pdf")
-    boxplot(temp_mat[upper.tri(temp_mat)])
-    dev.off()
-  }
-
-  list(labels = labels, dist_mat = dist_mat, dszn_bool = dszn_bool)
 }

@@ -348,8 +348,8 @@ for (identifier in model_idents) {
                          "(Inferential)   KGE: ", inf_kge,
                          "   R2: ", inf_r2, "\n")
 
-  precomputed_beta_plots[[identifier]] <- plot_beta_and_derived_feats(beta_mtx[identifier, ],                       ## nolint
-                                                                      title = title_string)                         ## nolint
+  precomputed_beta_plots[[identifier]] <- calculate_plot_info(beta_mtx[identifier, ],                               ## nolint
+                                                              title = title_string)                                 ## nolint
   setTxtProgressBar(p, which(model_idents == identifier))
 }
 close(p)
