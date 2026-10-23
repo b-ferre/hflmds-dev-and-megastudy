@@ -235,13 +235,6 @@ shinyUI(fluidPage(
         accordion_panel(
           "Display Options",
           fluidRow(
-            sliderInput(
-              inputId = "heatmap_grid_size",
-              label = "Heatmap Grid Size (km, Log Base 10 Scale)",
-              min = 0, max = 5, value = 3, step = 0.01
-            )
-          ),
-          fluidRow(
             selectInput(
               inputId = "coloring_regime",
               label = "Coloring Scheme",
@@ -292,6 +285,13 @@ shinyUI(fluidPage(
         ),
         tabPanel(
           title = "Cluster Heatmap Visualizer",
+          fluidRow(
+            sliderInput(
+              inputId = "heatmap_grid_size",
+              label = "Heatmap Grid Size (km, Log Base 10 Scale)",
+              min = 0, max = 5, value = 3, step = 0.01
+            )
+          ),
           fluidRow(
             leafletOutput("clustering_heatmap", height = 500)
           )

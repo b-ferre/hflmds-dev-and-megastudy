@@ -161,13 +161,7 @@ shinyServer(function(input, output, session) {
       hm <- heatmap_sf_object
       hm <- hm[!sf::st_is_empty(hm), ]
 
-      cat("HEATMAP: nonempty features =", nrow(hm), "\n")
       validate(need(nrow(hm) > 0, "Heatmap contains no nonempty geometries."))
-
-      print(sf::st_bbox(hm))
-      print(table(sf::st_geometry_type(hm)))
-      print(table(hm$majority_cluster, useNA = "ifany"))
-      print(summary(hm$opacity))
 
       # Use the existing named cluster colours directly.
       hm$fill_colour <- unname(
@@ -409,7 +403,7 @@ shinyServer(function(input, output, session) {
           if (debugmode) cat("SERVER: loading rep with key \"", rep_cache_key, "\" from cache...\n")                            ## nolint
           plt <- render_beta_and_derived_feats(
             current_rep_cache[[paste0(rep_info$type, rep_info$cluster)]],
-            plot_beta_and_derived_feats(
+            calculate_plot_info(
               current_rep_cache[[paste0(rep_info$type, rep_info$cluster)]]
             )
           )
@@ -429,7 +423,7 @@ shinyServer(function(input, output, session) {
             cluster_rep_cache(current_rep_cache)
             plt <- render_beta_and_derived_feats(
               new_rep,
-              plot_beta_and_derived_feats(
+              calculate_plot_info(
                 new_rep
               )
             )
@@ -446,7 +440,7 @@ shinyServer(function(input, output, session) {
             cluster_rep_cache(current_rep_cache)
             plt <- render_beta_and_derived_feats(
               new_rep,
-              plot_beta_and_derived_feats(
+              calculate_plot_info(
                 new_rep
               )
             )

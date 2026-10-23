@@ -331,7 +331,7 @@ get_rendered_beta_plot <- function(model_identifier) {
   }
 
   if (is.null(plot_data)) {
-    plot_data <- plot_beta_and_derived_feats(bvec)  ## nolint
+    plot_data <- calculate_plot_info(bvec)  ## nolint
   }
 
   obj <- render_beta_and_derived_feats(bvec, plot_data)
@@ -425,6 +425,14 @@ get_clustering_result <- function(
   )
   if (debugmode) cat("  > done.\n")
 
+  if (debugmode) {
+    pdf("CHECK_DIST_MAT.pdf")
+    all_distances <- unname(as.vector(dist_mat[upper.tri(dist_mat)]))
+    all_nonzero_distances <- all_distances[all_distances > 0]
+    boxplot(all_nonzero_distances)
+    dev.off()
+  }
+
   ## if indicated, pre-trim any outliers with k-neighbor distances
   ## in the upper outlier_thresh quantile
   if (outlier_thresh > 0) {
@@ -432,7 +440,7 @@ get_clustering_result <- function(
       cat(
         "  > trimming catchments with",
         paste0(outlier_neighbor_index, "-neighbor"), "distance",
-        "in the top", paste0((1 - outlier_thresh) * 100, "% of all"),
+        "in the top", paste0((outlier_thresh) * 100, "% of all"),
         paste0(outlier_neighbor_index, "-neighbor"), "distances...\n"
       )
     }
@@ -444,7 +452,7 @@ get_clustering_result <- function(
     cutoff <- quantile(neighbor_dists, 1 - outlier_thresh)
     keep <- neighbor_dists < cutoff
 
-    pdf("CHECK.pdf")
+    pdf("CHECK_OUTLIER_BOX.pdf")
     boxplot(neighbor_dists)
     abline(h = cutoff, col = "red", lty = 2)
     dev.off()
