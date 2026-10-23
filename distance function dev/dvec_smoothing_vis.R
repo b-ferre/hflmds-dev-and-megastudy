@@ -16,114 +16,133 @@ example_strings <- list(
   "5016_uncentered",
   "2606_uncentered"
 )
-
 example_betas <- lapply(example_strings, function(id) beta_mat[id, ])
-
 example_deltas <- lapply(example_betas, function(bvec) calculate_delta(bvec))
 
-smooth_delta_sg <- function(dvec, obl_size, smooth_window) {
-  # first, obliterate short spikes of length < 5
-  dvec_no_spike <- runmed(dvec, k = obl_size)
 
-  # smooth the resulting vector using rolling average
-  dvec_smooth <- sgolayfilt(dvec_no_spike, p = 3, n = smooth_window)
+###############################################################################
+iter_med_avg <- function(
+  dvec,
+  order = "med_avg",
+  n_iter,
+  med_window,
+  avg_window
+) {
+  med_window <- round(length(dvec) * med_window)
+  med_window <- med_window - (med_window %% 2) + 1
 
-  dvec_smooth[is.na(dvec_smooth)] <- dvec_no_spike[is.na(dvec_smooth)]
+  avg_window <- round(avg_window * length(dvec))
+  avg_weights <- rep(1, avg_window) / avg_window
 
-  dvec_smooth
-}
-
-smooth_delta_sg_iter <- function(dvec, n_iter = 30, obl_size = 35, smooth_window = 71) {   ## nolint
   for (i in seq_len(n_iter)) {
-    dvec <- smooth_delta_sg(dvec, obl_size = obl_size, smooth_window = smooth_window)       ## nolint
+    if (order == "med_avg") {
+      dvec <- runmed(x = dvec, k = med_window)
+      dvec <- stats::filter(
+        x = dvec, filter = avg_weights, sides = 2, circular = TRUE
+      )
+    } else if (order == "avg_med") {
+      dvec <- stats::filter(
+        x = dvec, filter = avg_weights, sides = 2, circular = TRUE
+      )
+      dvec <- runmed(x = dvec, k = med_window)
+    }
   }
-  dvec
-}
-
-smooth_delta_fast_spline <- function(dvec, obl_size = global_obl_size, smooth_penalty = 0.8) { ## nolint
-  # 1. Remove spikes once
-  dvec_no_spike <- stats::runmed(dvec, k = obl_size)
-
-  # 2. Fit a smoothing spline
-  # spar controls smoothness (typically 0 to 1). Closer to 1 = heavier smoothing. ## nolint
-  spline_fit <- smooth.spline(seq_along(dvec_no_spike), dvec_no_spike, spar = smooth_penalty)  ## nolint
-
-  # 3. Extract the smoothed y values
-  dvec_smooth <- spline_fit$y
-
-  dvec_smooth
-}
-
-smooth_delta_fast_gaussian <- function(dvec, obl_size = global_obl_size, sigma = global_smoothing_window) { ## nolint
-  front_pad_len <- (3 * sigma) - 1
-  back_pad_len <- (3 * sigma)
-
-  dvec <- c(tail(dvec, front_pad_len), dvec, head(dvec, back_pad_len))
-
-  # 1. Remove spikes once
-  dvec_no_spike <- stats::runmed(dvec, k = obl_size)
-
-  # 2. Create a Gaussian kernel
-  # sigma controls the width of the smoothing (equivalent to more iterations)
-  kernel_size <- ceiling(sigma * 6)
-  x <- seq(-kernel_size / 2, kernel_size / 2, length.out = kernel_size)
-  gauss_kernel <- exp(-0.5 * (x / sigma)^2)
-  gauss_kernel <- gauss_kernel / sum(gauss_kernel) # Normalize to sum to 1
-
-  # 3. Convolve the signal with the kernel
-  dvec_smooth <- stats::filter(dvec_no_spike, gauss_kernel, sides = 2)
-
-  cat("original length:", length(dvec), "\n")
-  cat("sigma:", sigma, "\n")
-  cat("num NAs at front:", which(!is.na(dvec_smooth))[1] - 1, "\n")
-  cat("num NAs at back:", length(dvec_smooth) - rev(which(!is.na(dvec_smooth)))[1], "\n") ## nolint
-
-  dvec_smooth <- dvec_smooth[!is.na(dvec_smooth)]
-  cat("length of returning vec:", length(dvec_smooth), "\n\n")
-
-  as.numeric(dvec_smooth)
-}
-
-smooth_delta_experimental <- function(dvec, obl_size = global_obl_size, window_size = global_smoothing_window, round_after = TRUE) {    ## nolint
-  ## first, obliterate short-lived spikes
-  dvec <- runmed(dvec, obl_size)
-
-  ## do rolling average - assuming that dvec is cyclical
-  weights <- rep(1, window_size) / window_size
-  dvec <- stats::filter(dvec, weights, method = "convolution", sides = 2, circular = TRUE)  ## nolint
-
-  stopifnot(!any(is.na(dvec)))
-
-  ## re-round the rolling average ??
-  if (round_after) dvec <- floor(dvec)
 
   dvec
 }
 
-global_smoothing_window <- 71
-global_obl_size <- 35
+avg_med_avg_l <- function(
+  dvec,
+  avg_window_1,
+  avg_window_2,
+  med_window
+) {
+  if (avg_window_2 <= avg_window_1) {
+    warning("incorrect use case for avg_med_avg_l")
+  }
+
+  med_window <- round(length(dvec) * med_window)
+  med_window <- med_window - (med_window %% 2) + 1
+
+  avg_window1 <- round(avg_window_1 * length(dvec))
+  avg_weights1 <- rep(1, avg_window1) / avg_window1
+  avg_window2 <- round(avg_window_2 * length(dvec))
+  avg_weights2 <- rep(1, avg_window2) / avg_window2
+
+  dvec <- stats::filter(
+    x = dvec, filter = avg_weights1, sides = 2, circular = TRUE
+  )
+  dvec <- runmed(x = dvec, k = med_window)
+  dvec <- stats::filter(
+    x = dvec, filter = avg_weights2, sides = 2, circular = TRUE
+  )
+
+  dvec
+}
+
+library(Matrix)
+
+whittaker_smooth <- function(y, lambda, d = 2) {
+  n <- length(y)
+  
+  # Construct a sparse identity matrix
+  I <- Diagonal(n)
+  
+  # Compute the d-th order difference matrix
+  D <- diff(I, differences = d)
+  
+  # Solve the penalized least squares system (I + lambda * D^T D)z = y
+  # crossprod(D) efficiently calculates D^T D
+  z <- solve(I + lambda * crossprod(D), y)
+  
+  return(as.numeric(z))
+}
+
+## methods to compare:
+##  - iterate (rolling median (x% window) -> rolling average (x% window))
+##  - iterate (rolling median (x% window) -> rolling average (y% window)) with y > x                                            ## nolint
+##  - iterate (rolling average (x% window) -> rolling median (x% window))
+##  - iterate (rolling average (y% window) -> rolling median (x% window)) with y > x                                            ## nolint
+##  - one round : rolling average (x% window) -> rolling median (x% window) -> rolling average (y% window) with y > x           ## nolint
+##  - iterate : rolling median (x% window)
+
+## best so far: 10 iters of 7% med -> 3% avg
+
+method_ <- function(dvec, tuning_var) {
+ whittaker_smooth(y = dvec, lambda = (tuning_var / sqrt(var(dvec))), d = 2)
+}
+dir_name <- "./whittaker_d2/"
+if (!dir.exists(dir_name)) dir.create(dir_name)
 
 for (example_index in seq_along(example_strings)) {
+
   beta_id <- example_strings[[example_index]]
 
   delta_vec <- example_deltas[[example_index]]
+  cat("id:", beta_id, ", var:", var(delta_vec), "\n")
 
-  pdf(paste0("smoothing_vis_id_", beta_id, ".pdf"))
+  pdf(paste0(dir_name, beta_id, ".pdf"))
 
   plot(delta_vec, type = "l", col = "blue")
-  lines(smooth_delta_sg_iter(delta_vec), col = "red")
-  lines(smooth_delta_experimental(delta_vec), col = "green")
-  lines(smooth_delta_experimental(delta_vec, round_after = FALSE), col = "purple")  ## nolint
+  lines(method_(delta_vec, tuning_var = 10), col = " red")
+  lines(method_(delta_vec, tuning_var = 100), col = "green")
+  lines(method_(delta_vec, tuning_var = 1000), col = "purple")
+  lines(method_(delta_vec, tuning_var = 10000), col = "orange")
+  # lines(method_(delta_vec, tuning_var = 71), col = "pink")
+  # lines(method_(delta_vec, tuning_var = 101), col = "black")
 
   legend(
     "bottomleft",
     legend = c(
       "Base Vector",
-      "Current Smoothing Func",
-      "Experimental (Rounded)",
-      "Experimental (Unrounded)"
+      "1",
+      "5",
+      "10",
+      "20",
+      "30",
+      "50"
     ),
-    col = c("blue", "red", "green", "purple"),
+    col = c("blue", "red", "green", "purple", "orange", "pink", "black"),
     lty = 1
   )
 

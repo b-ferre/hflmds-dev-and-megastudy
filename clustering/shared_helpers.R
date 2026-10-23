@@ -4,7 +4,7 @@ library(ggplot2)
 library(ggplotify)
 library(grid)
 library(stats)
-library(signal)
+library(Matrix)
 
 #' @param bvec is a flattened, lag-minor indexed vector of B(s, t) coefficients
 #'
@@ -19,33 +19,21 @@ calculate_delta <- function(bvec, m = 364, max_lag = 150) {
   d
 }
 
-smooth_delta_sg <- function(dvec, obl_size, smooth_window) {
-  # first, obliterate short spikes of length < obl_size
-  dvec_no_spike <- runmed(dvec, k = obl_size)
-
-  # smooth the resulting vector using rolling average
-  dvec_smooth <- sgolayfilt(dvec_no_spike, p = 3, n = smooth_window)
-
-  dvec_smooth[is.na(dvec_smooth)] <- dvec_no_spike[is.na(dvec_smooth)]
-
-  dvec_smooth
-}
-
-smooth_delta_n_times <- function(dvec, n = 30, obl_size = 35, smooth_window = 71, mode = "sg") {   ## nolint
-  for (i in seq_len(n)) {
-    if (mode == "sg") {
-      dvec <- smooth_delta_sg(dvec, obl_size = obl_size, smooth_window = smooth_window)       ## nolint
-    } else if (mode == "ra") {
-      dvec <- smooth_delta_ra(dvec, obl_size = obl_size, smooth_window = smooth_window)       ## nolint
-    } else {
-      stop("invalid mode provided")
-    }
+#' TODO: document this
+smooth_delta <- function(dvec, diff_pen = 1, lambda_1 = 1000) {
+  if (var(dvec) == 0) {
+    return(dvec)
   }
-  dvec
-}
 
-smooth_delta <- function(dvec) {
-  smooth_delta_n_times(dvec)
+  adaptive_lambda <- lambda_1 / sqrt(var(dvec))
+
+  ident <- Diagonal(length(dvec))
+
+  diff_mat <- diff(ident, differences = 1)
+
+  smoothed_delta <- solve(ident + adaptive_lambda * crossprod(diff_mat), dvec)
+
+  as.numeric(smoothed_delta)
 }
 
 #' @param bvec is a flattened, lag-minor indexed vector of B(s, t) coefficients
