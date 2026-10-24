@@ -63,16 +63,16 @@ INITCLUSTERSETTINGS <- c(                                                       
     )
   ), all_feat_weight_names),                                                                                                          ## nolint
   list(
-    comb_func = "(0.8)eCDF(+) + (0.2)(+)",
-    clust_algo = "Hierarchical",
+    comb_func = "eCDF(+)",
+    clust_algo = "K-Medoids",
     n_pts_core = 2,
     n_pts_clust = 10,
     linkage_method = "ward.D2",
     n_clusts_hclust = 8,
     n_clusts_kmedoids = 8,
     deseasonalization_selection = "Wherever Meaningfully Better Than Uncentered",                                                     ## nolint
-    dszn_thresh_selection = 0.15,
-    min_kge_for_clust = 0.25,
+    dszn_thresh_selection = 0,
+    min_kge_for_clust = 0.4,
     remove_negative_beta_ests = TRUE
   )
 )

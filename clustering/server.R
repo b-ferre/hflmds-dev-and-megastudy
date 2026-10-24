@@ -137,6 +137,9 @@ shinyServer(function(input, output, session) {
       labels[as.character(map_df$model_identifier)]
     ))
 
+    ## trim outliers if indicated
+    map_df <- map_df[map_df$cluster != "0", ]
+
     stopifnot(!anyNA(map_df$cluster))
     stopifnot(!any(duplicated(as.vector(sapply(map_df$model_identifier, function(id_) { # nolint
       str_split(id_, "_")[[1]][1]
@@ -493,10 +496,8 @@ shinyServer(function(input, output, session) {
     n_clusts_hclust <- input$n_clusts_hclust
     req(n_clusts_hclust)
 
-    print("HERE1")
     n_clusts_kmedoids <- input$n_clusts_kmedoids
     req(n_clusts_kmedoids)
-    print("HERE2")
 
     algo_hyperparams <- list(
       n_pts_clust = n_pts_clust,
