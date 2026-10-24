@@ -13,6 +13,7 @@ library(patchwork)
 library(bslib)
 library(reticulate)
 library(sf)
+library(cluster)
 library(dplyr)
 
 source("shared_helpers.R")
@@ -68,6 +69,7 @@ INITCLUSTERSETTINGS <- c(                                                       
     n_pts_clust = 10,
     linkage_method = "ward.D2",
     n_clusts_hclust = 8,
+    n_clusts_kmedoids = 8,
     deseasonalization_selection = "Wherever Meaningfully Better Than Uncentered",                                                     ## nolint
     dszn_thresh_selection = 0.15,
     min_kge_for_clust = 0.25,
@@ -425,14 +427,6 @@ get_clustering_result <- function(
   )
   if (debugmode) cat("  > done.\n")
 
-  if (debugmode) {
-    pdf("CHECK_DIST_MAT.pdf")
-    all_distances <- unname(as.vector(dist_mat[upper.tri(dist_mat)]))
-    all_nonzero_distances <- all_distances[all_distances > 0]
-    boxplot(all_nonzero_distances)
-    dev.off()
-  }
-
   ## if indicated, pre-trim any outliers with k-neighbor distances
   ## in the upper outlier_thresh quantile
   if (outlier_thresh > 0) {
@@ -484,6 +478,13 @@ get_clustering_result <- function(
         dist_mat = dist_mat,
         linkage_method = clustering_algorithm_params$linkage_method,
         n_clusts = clustering_algorithm_params$n_clusts_hclust
+      )
+    },
+    "K-Medoids" = {
+      if (debugmode) cat("  > running k-medoids clustering...\n")
+      get_kmedoids_labels(
+        dist_mat = dist_mat,
+        n_clusts = clustering_algorithm_params$n_clusts_kmedoids
       )
     }
   )
@@ -692,6 +693,7 @@ get_hdbscan_labels <- function(dist_mat,
 #' @param dist_mat is a pairwise distance matrix with colum/row names based
 #' on model identifiers
 #' @param linkage_method is a linkage method to be passed to stats::hclust
+#' @param n_clusts is the number of clusters to find
 #'
 #' @return a named list of labels where the name is the gridcode and the label
 #' is the cluster that the B(s, t) from the relevant gridcode belongs to
@@ -721,6 +723,24 @@ get_hclust_labels <- function(dist_mat,
   labels
 }
 
+
+#' @param dist_mat is a pairwise distance matrix with colum/row names based
+#' on model identifiers
+#' @param n_clusts is the number of clusters to find
+#'
+#' @return a named list of labels where the name is the gridcode and the label
+#' is the cluster that the B(s, t) from the relevant gridcode belongs to
+get_kmedoids_labels <- function(dist_mat,
+                                n_clusts) {
+  ## check dist_mat for any issues
+  stopifnot(colnames(dist_mat) == rownames(dist_mat))
+  stopifnot(dim(dist_mat)[1] == dim(dist_mat)[2])
+
+  clust_res <- cluster::pam(x = dist_mat, k = n_clusts, diss = TRUE)
+  labels <- clust_res$clustering
+
+  labels
+}
 ###############################################################################
 ####################### REPRESENTATIVE CALCULATIONS ###########################
 ###############################################################################

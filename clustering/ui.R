@@ -170,10 +170,19 @@ shinyUI(fluidPage(
               value = INITCLUSTERSETTINGS$n_clusts_hclust
             )
           ),
+          accordion_panel(
+            title = "K-Medoids Clustering Parameters",
+            sliderInput(
+              inputId = "n_clusts_kmedoids",
+              label = "Number of Clusters (K-Medoids)",
+              min = 1, max = 50, step = 1,
+              value = INITCLUSTERSETTINGS$n_clusts_kmedoids
+            )
+          ),
           selectInput(
             inputId = "clust_algo",
             label = "Clustering Algorithm",
-            choices = c("HDBSCAN", "Hierarchical"),
+            choices = c("HDBSCAN", "Hierarchical", "K-Medoids"),
             selected = INITCLUSTERSETTINGS$clust_algo
           ),
           sliderInput(

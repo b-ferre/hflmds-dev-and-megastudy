@@ -36,13 +36,18 @@ smooth_delta <- function(dvec, diff_pen = 1, lambda_1 = 1000) {
   as.numeric(smoothed_delta)
 }
 
+## FIXME: check that I am doing the indexing right
 #' @param bvec is a flattened, lag-minor indexed vector of B(s, t) coefficients
 #'
 #' @return a (m + 1)-length vector representing the total transfer on day t*
-#' (i.e. the sum of all B(s, t) coefficients with t = t*)
+#' (i.e. the sum of all B(s, t + s) coefficients with t = t* and s \in S)
 calculate_total_transfer <- function(bvec, m = 364, max_lag = 150) {
   as.numeric(sapply(seq_len(m + 1), function(t) {
-    sum(bvec[(((t - 1) * (max_lag)) + 1):(t * max_lag)])
+    sum(sapply(seq_len(max_lag), function(s) {
+      day_index <- t + s - 1 ## account for the fact that s = 1 corresponds to lag 0                  ## nolint
+      true_day_index <- ((day_index - 1) %% (m + 1)) + 1    ## wrap the day index around the cycle    ## nolint
+      bvec[((true_day_index - 1) * max_lag) + s]
+    }))
   }))
 }
 

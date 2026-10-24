@@ -493,11 +493,17 @@ shinyServer(function(input, output, session) {
     n_clusts_hclust <- input$n_clusts_hclust
     req(n_clusts_hclust)
 
+    print("HERE1")
+    n_clusts_kmedoids <- input$n_clusts_kmedoids
+    req(n_clusts_kmedoids)
+    print("HERE2")
+
     algo_hyperparams <- list(
       n_pts_clust = n_pts_clust,
       n_pts_core = n_pts_core,
       linkage_method = linkage_method,
-      n_clusts_hclust = n_clusts_hclust
+      n_clusts_hclust = n_clusts_hclust,
+      n_clusts_kmedoids = n_clusts_kmedoids
     )
 
     dszn_scheme <- input$deseasonalization_selection
