@@ -1,136 +1,140 @@
 shinyUI(fluidPage(
-  titlePanel("HFLMDS Clustering Results"),
+  titlePanel("HFLMDS Clustering Applet"),
   theme = bslib::bs_theme(version = 5),
 
   tags$head(tags$style(".no-pointer-events { pointer-events: none; }")),
 
   ## distance function tuning + map display
-  sidebarLayout(
-    ## sidebar panel containing clustering tuning params
-    sidebarPanel = sidebarPanel(
+  page_navbar(
+    ## panel containing clustering tuning params
+    nav_panel(
+      title = "Clustering and Mapping Parameters",
       accordion(
-        ## delta distances
         accordion_panel(
-          title = "Delta Comparisons",
-          sliderInput(
-            inputId = "delta_l2_wt",
-            label = "L2 Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$delta_l2_wt, step = 0.05
+          title = "Dissimilarity Component Weights",
+          ## delta distances
+          accordion_panel(
+            title = "Delta Comparisons",
+            sliderInput(
+              inputId = "delta_l2_wt",
+              label = "L2 Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$delta_l2_wt, step = 0.05
+            ),
+            sliderInput(
+              inputId = "delta_l1_wt",
+              label = "L1 Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$delta_l1_wt, step = 0.05
+            ),
+            sliderInput(
+              inputId = "delta_cheby_wt",
+              label = "Chebyshev Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$delta_cheby_wt, step = 0.05
+            ),
+            sliderInput(
+              inputId = "delta_scaled_cheby_wt",
+              label = "Scaled Chebyshev Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$delta_scaled_cheby_wt, step = 0.05
+            )
           ),
-          sliderInput(
-            inputId = "delta_l1_wt",
-            label = "L1 Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$delta_l1_wt, step = 0.05
+          ## smoothed delta distances
+          accordion_panel(
+            title = "Smoothed Delta Comparisons",
+            sliderInput(
+              inputId = "smooth_delta_l2_wt",
+              label = "L2 Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$smooth_delta_l2_wt, step = 0.05
+            ),
+            sliderInput(
+              inputId = "smooth_delta_l1_wt",
+              label = "L1 Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$smooth_delta_l1_wt, step = 0.05
+            ),
+            sliderInput(
+              inputId = "smooth_delta_cheby_wt",
+              label = "Chebyshev Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$smooth_delta_cheby_wt, step = 0.05
+            ),
+            sliderInput(
+              inputId = "smooth_delta_scaled_cheby_wt",
+              label = "Scaled Chebyshev Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$smooth_delta_scaled_cheby_wt,
+              step = 0.05
+            )
           ),
-          sliderInput(
-            inputId = "delta_cheby_wt",
-            label = "Chebyshev Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$delta_cheby_wt, step = 0.05
+          ## sme vector distances
+          accordion_panel(
+            title = "Maximally Effective Lag Vector Comparisons",
+            sliderInput(
+              inputId = "sme_l2_wt",
+              label = "L2 Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$sme_l2_wt, step = 0.05
+            ),
+            sliderInput(
+              inputId = "sme_l1_wt",
+              label = "L1 Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$sme_l1_wt, step = 0.05
+            ),
+            sliderInput(
+              inputId = "sme_cheby_wt",
+              label = "Chebyshev Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$sme_cheby_wt, step = 0.05
+            ),
+            sliderInput(
+              inputId = "sme_scaled_cheby_wt",
+              label = "Scaled Chebyshev Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$sme_scaled_cheby_wt, step = 0.05
+            )
           ),
-          sliderInput(
-            inputId = "delta_scaled_cheby_wt",
-            label = "Scaled Chebyshev Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$delta_scaled_cheby_wt, step = 0.05
-          )
-        ),
-        ## smoothed delta distances
-        accordion_panel(
-          title = "Smoothed Delta Comparisons",
-          sliderInput(
-            inputId = "smooth_delta_l2_wt",
-            label = "L2 Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$smooth_delta_l2_wt, step = 0.05
+          ## tt vector distances
+          accordion_panel(
+            title = "Total Transfer Comparisons",
+            sliderInput(
+              inputId = "tt_l2_wt",
+              label = "L2 Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$tt_l2_wt, step = 0.05
+            ),
+            sliderInput(
+              inputId = "tt_l1_wt",
+              label = "L1 Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$tt_l1_wt, step = 0.05
+            ),
+            sliderInput(
+              inputId = "tt_cheby_wt",
+              label = "Chebyshev Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$tt_cheby_wt, step = 0.05
+            ),
+            sliderInput(
+              inputId = "tt_scaled_cheby_wt",
+              label = "Scaled Chebyshev Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$tt_scaled_cheby_wt, step = 0.05
+            )
           ),
-          sliderInput(
-            inputId = "smooth_delta_l1_wt",
-            label = "L1 Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$smooth_delta_l1_wt, step = 0.05
+          ## global l2 distance
+          accordion_panel(
+            title = "Overall L2 Distance",
+            sliderInput(
+              inputId = "global_l2_wt",
+              label = "L2 Distance",
+              min = 0, max = 1,
+              value = INITCLUSTERSETTINGS$global_l2_wt, step = 0.05
+            )
           ),
-          sliderInput(
-            inputId = "smooth_delta_cheby_wt",
-            label = "Chebyshev Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$smooth_delta_cheby_wt, step = 0.05
-          ),
-          sliderInput(
-            inputId = "smooth_delta_scaled_cheby_wt",
-            label = "Scaled Chebyshev Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$smooth_delta_scaled_cheby_wt,
-            step = 0.05
-          )
-        ),
-        ## sme vector distances
-        accordion_panel(
-          title = "Maximally Effective Lag Vector Comparisons",
-          sliderInput(
-            inputId = "sme_l2_wt",
-            label = "L2 Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$sme_l2_wt, step = 0.05
-          ),
-          sliderInput(
-            inputId = "sme_l1_wt",
-            label = "L1 Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$sme_l1_wt, step = 0.05
-          ),
-          sliderInput(
-            inputId = "sme_cheby_wt",
-            label = "Chebyshev Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$sme_cheby_wt, step = 0.05
-          ),
-          sliderInput(
-            inputId = "sme_scaled_cheby_wt",
-            label = "Scaled Chebyshev Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$sme_scaled_cheby_wt, step = 0.05
-          )
-        ),
-        ## tt vector distances
-        accordion_panel(
-          title = "Total Transfer Comparisons",
-          sliderInput(
-            inputId = "tt_l2_wt",
-            label = "L2 Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$tt_l2_wt, step = 0.05
-          ),
-          sliderInput(
-            inputId = "tt_l1_wt",
-            label = "L1 Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$tt_l1_wt, step = 0.05
-          ),
-          sliderInput(
-            inputId = "tt_cheby_wt",
-            label = "Chebyshev Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$tt_cheby_wt, step = 0.05
-          ),
-          sliderInput(
-            inputId = "tt_scaled_cheby_wt",
-            label = "Scaled Chebyshev Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$tt_scaled_cheby_wt, step = 0.05
-          )
-        ),
-        ## global l2 distance
-        accordion_panel(
-          title = "Overall L2 Distance",
-          sliderInput(
-            inputId = "global_l2_wt",
-            label = "L2 Distance",
-            min = 0, max = 1,
-            value = INITCLUSTERSETTINGS$global_l2_wt, step = 0.05
-          )
         ),
         ## clustering algorithm selection & hyperparams
         accordion_panel(
@@ -206,9 +210,7 @@ shinyUI(fluidPage(
             label = "Combination Function for Distance Components",
             choices = c("+",
                         "eCDF(+)",
-                        "eCDF(+(eCDF))",
-                        "+(eCDF)",
-                        "(0.8)eCDF(+) + (0.2)(+)"),
+                        "+(eCDF)"),
             selected = INITCLUSTERSETTINGS$comb_func
           ),
           sliderInput(
@@ -287,8 +289,9 @@ shinyUI(fluidPage(
         ), width = 12)
       ),
     ),
-    ## main panel containing map of catchments and representatives
-    mainPanel = mainPanel(
+    ## panel containing map of catchments and representatives
+    nav_panel(
+      title = "Results and Visualizations",
       tabsetPanel(
         tabPanel(
           title = "Catchment-Wise Cluster Visualizer",
@@ -318,11 +321,12 @@ shinyUI(fluidPage(
         tabPanel(
           title = "Cluster Heatmap Visualizer",
           fluidRow(
-            sliderInput(
+            column(sliderInput(
               inputId = "heatmap_grid_size",
               label = "Heatmap Grid Size (km, Log Base 10 Scale)",
-              min = 0, max = 5, value = 3, step = 0.01
-            )
+              min = 1, max = 3, value = 2.5, step = 0.01,
+              width = "100%"
+            ), width = 12)
           ),
           fluidRow(
             leafletOutput("clustering_heatmap", height = 500)
