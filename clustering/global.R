@@ -156,7 +156,7 @@ get_inf_r2 <- function(gridcode, dszn_bool) {
 #' optionally, the vectors for smooth_delta and delta overlayed
 plot_beta <- function(
   bvec, title = "", ncolors = 20, m = 364, max_lag = 150,
-  delta = NULL, smooth_delta = NULL
+  delta = NULL, smooth_delta = NULL, simplified = FALSE
 ) {
   bgrid <- cbind(expand.grid(s = seq_len(max_lag), t = seq_len(m + 1)), b = bvec)           ## nolint
   dvec <- calculate_delta(bvec)
@@ -213,17 +213,22 @@ plot_beta <- function(
   if (!is.null(delta)) delta <- as.numeric(delta)
   if (!is.null(smooth_delta)) smooth_delta <- as.numeric(smooth_delta)
 
+  xlab_ <- if (simplified) NULL else list("Day of the year", cex = 1.4)
+  ylab_ <- if (simplified) NULL else list("Lag (Days)", cex = 1.4)
+  scale_cex <- if (simplified) 0.6 else 1.2
+  colorkey_width <- if (simplified) 0.6 else 1
+
   lattice::levelplot(
     b ~ t * s,
     data = bgrid,
     col.regions = cols,
     at = at_vals,
-    xlab = list("Day of the year", cex = 1.4),
-    ylab = list("Lag (Days)", cex = 1.4),
-    scales = list(cex = 1.2),
-    colorkey = list(axis.text = list(cex = 1.2)),
+    xlab = xlab_,
+    ylab = ylab_,
+    scales = list(cex = scale_cex),
+    colorkey = list(width = colorkey_width, axis.text = list(cex = scale_cex)),
     aspect = "xy",
-    main = title,
+    main = list(title, cex = scale_cex),
 
     panel = function(...) {
       # Draw the surface first, then overlay the lines.
@@ -340,6 +345,13 @@ get_rendered_beta_plot <- function(model_identifier) {
   obj
 }
 
+get_simple_rendered_beta_plot <- function(model_identifier) {
+  bvec <- precomputed_beta_matrix[as.character(model_identifier), ]
+
+  obj <- plot_beta(bvec, title = model_identifier, simplified = TRUE)
+  obj
+}
+
 ###############################################################################
 ###################### MAIN CLUSTERING ENTRY-POINT ############################
 ###############################################################################
@@ -428,7 +440,7 @@ get_clustering_result <- function(
   if (debugmode) cat("  > done.\n")
 
   ## if indicated, pre-trim any outliers with k-neighbor distances
-  ## in the upper outlier_thresh quantile
+  ## in the upper outlier_thresh quantile before feeding to clusterer
   if (outlier_thresh > 0) {
     if (debugmode) {
       cat(
@@ -445,11 +457,6 @@ get_clustering_result <- function(
 
     cutoff <- quantile(neighbor_dists, 1 - outlier_thresh)
     keep <- neighbor_dists < cutoff
-
-    pdf("CHECK_OUTLIER_BOX.pdf")
-    boxplot(neighbor_dists)
-    abline(h = cutoff, col = "red", lty = 2)
-    dev.off()
 
     n_keep <- sum(keep)
     if (debugmode) {

@@ -2,6 +2,8 @@ shinyUI(fluidPage(
   titlePanel("HFLMDS Clustering Results"),
   theme = bslib::bs_theme(version = 5),
 
+  tags$head(tags$style(".no-pointer-events { pointer-events: none; }")),
+
   ## distance function tuning + map display
   sidebarLayout(
     ## sidebar panel containing clustering tuning params
@@ -290,7 +292,28 @@ shinyUI(fluidPage(
       tabsetPanel(
         tabPanel(
           title = "Catchment-Wise Cluster Visualizer",
-          fluidRow(leafletOutput("clustering_map", height = 500))
+          div(
+            style = "position: relative;",
+
+            leafletOutput("clustering_map", height = 500),
+
+            div(
+              style = paste(
+                "position: absolute;",
+                "top: 12px;",
+                "right: 12px;",
+                "width: 22%;",
+                "height: 170px;",
+                "z-index: 1000;",
+                "background: rgba(255, 255, 255, 0.95);",
+                "border-radius: 8px;",
+                "box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);",
+                "overflow: hidden;",
+                "pointer-events: none;"
+              ),
+              plotOutput("plot_vis_area", height = "170px")
+            )
+          )
         ),
         tabPanel(
           title = "Cluster Heatmap Visualizer",

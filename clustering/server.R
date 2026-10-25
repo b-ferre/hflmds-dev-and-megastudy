@@ -27,10 +27,12 @@ shinyServer(function(input, output, session) {
     considered_catchments <- clust_res$all_catchments_considered
     clustered_catchments <- names(labels)
 
-    ## first, get a df of all considered catchments (even those with
-    ## insufficient performance to be used for clustering)
+    ## first, get a df of all considered catchments regardless of thresholding
+    ## (all available gridcodes are included once, with either centerered or
+    ## uncentered tag)
     map_df <- map_data
     map_df <- map_data[map_df$model_identifier %in% considered_catchments, ]
+    stopifnot(nrow(map_df) == length(unique_gridcodes))
 
     ## for all catchments that were actually clustered, set their cluster
     ## value in the df to their label in {0, 1, ..., n clusters} where a
@@ -78,16 +80,16 @@ shinyServer(function(input, output, session) {
 
     } else if (input$coloring_regime == "Uncentered KGE - Centered KGE") {
 
-      cent_scores <- precomputed_score_df$inf_kge[
-        as.vector(unlist(lapply(str_split(map_df$model_identifier, "_"), function(spl_i) {    ## nolint
-          spl_i[2] == "centered"
-        })))
-      ]
-      uncent_scores <- precomputed_score_df$inf_kge[
-        as.vector(unlist(lapply(str_split(map_df$model_identifier, "_"), function(spl_i) {    ## nolint
-          spl_i[2] == "uncentered"
-        })))
-      ]
+      cent_scores <- as.numeric(sapply(unique_gridcodes, function(gc_i_) {
+        precomputed_score_df$inf_kge[
+          precomputed_score_df$model_identifier == paste0(gc_i_, "_centered")
+        ]
+      }))
+      uncent_scores <- as.numeric(sapply(unique_gridcodes, function(gc_i_) {
+        precomputed_score_df$inf_kge[
+          precomputed_score_df$model_identifier == paste0(gc_i_, "_uncentered")
+        ]
+      }))
       scores <- uncent_scores - cent_scores
 
       map_df$color <- map_scores_to_rg_pal(scores, threshold = 0)
@@ -202,7 +204,8 @@ shinyServer(function(input, output, session) {
     cat("SERVER: heatmap construction finished...\n")
   }, ignoreInit = TRUE, priority = 8)
 
-  ## handle map marker clicks and popup graph displays
+  ## handle map marker clicks and popup graph displays for beta surface
+  ## and derived features
   observeEvent(input$clustering_map_marker_click, {
 
     req(input$clustering_map_marker_click$id)
@@ -223,6 +226,78 @@ shinyServer(function(input, output, session) {
       footer = modalButton("Close")
     ))
   }, ignoreInit = TRUE)
+
+  ## handle map marker mouseovers and plot_vis_area display
+  ## for JUST B(s, t) surface
+  # define a placeholder plot so I don't have to regenerate it many times
+  placeholder_plot <- grid::textGrob(
+    paste(
+      "Mouse over a catchment",
+      "to view its corresponding",
+      "\u03b2(s, t) plot.",
+      sep = "\n"
+    ),
+    gp = grid::gpar(
+      fontsize = 14,
+      col = "#555555",
+      lineheight = 1.4
+    )
+  )
+
+  current_mouseover_map_id <- reactiveVal(NULL)
+
+  # whenever a new marker is moused over, update our reactive
+  # value that tracks this value
+  observeEvent(input$clustering_map_marker_mouseover, {
+    id <- input$clustering_map_marker_mouseover$id
+    req(id)
+
+    current_mouseover_map_id(as.character(id))
+  }, ignoreInit = TRUE)
+
+  # whenever we mouse out from a marker, update our reactive
+  # value to NULL if the moused out marker matches the currently
+  # mouse over marker
+  observeEvent(input$clustering_map_marker_mouseout, {
+    id <- input$clustering_map_marker_mouseout$id
+
+    if (!is.null(id) &&
+          identical(as.character(id), current_mouseover_map_id())) {
+      current_mouseover_map_id(NULL)
+    }
+  }, ignoreInit = TRUE)
+
+  # to avoid issues with "queueing" tons of updates to the beta
+  # visualizer, create a debounced version of the current_mouseover_id
+  # for the plotter to track
+  settled_mouseover_map_id <- shiny::debounce(
+    reactive(current_mouseover_map_id()),
+    millis = function() {
+      # wait for a while before returning to the placeholder in order to permit
+      # quick "flips" between catchments in the same cluster for user ease of
+      # comparison, and add a much shorter debounce to transfers to new
+      # model ids so that accidentally mousing over a bunch of them while
+      # moving cursor across the screen doesn't break anything
+      if (is.null(current_mouseover_map_id())) {
+        750
+      } else {
+        30  # Brief pause to filter accidental hovers
+      }
+    }
+  )
+
+  # plot a beta plot for whatever the current value of
+  # settled_mouseover_map_id iss
+  output$plot_vis_area <- renderPlot({
+    id <- settled_mouseover_map_id()
+
+    if (is.null(id)) {
+      grid::grid.newpage()
+      grid::grid.draw(placeholder_plot)
+    } else {
+      print(get_simple_rendered_beta_plot(id))
+    }
+  })
 
   ## render (& reactively re-render) representative explorer UI
   ## based on clustering results
@@ -277,7 +352,7 @@ shinyServer(function(input, output, session) {
         ) |> tagList()
       } else {
         div(paste0("There are no cluster representatives to display as no",
-                  " clusters were detected. Consider lowering minpts."),
+                   " clusters were detected. Consider lowering minpts."),
             style = "color:black; padding-top:30px; padding-left:55px")
       }
     })
