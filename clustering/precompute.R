@@ -22,18 +22,18 @@ beta_est_file_dir <- "../results/"
 all_beta_f <- list.files(beta_est_file_dir)
 get_gc <- function(fn) str_remove_all(fn, "[^\\d]")
 
-## FIXME: uncomment below once predictive testing is done
-# centered_pred_gc <- as.numeric(sapply(all_beta_f[str_detect(all_beta_f, "pred_model_centered")], get_gc))       ## nolint
-# centered_inf_gc <- as.numeric(sapply(all_beta_f[str_detect(all_beta_f, "inf_model_centered")], get_gc))         ## nolint
-# uncentered_pred_gc <- as.numeric(sapply(all_beta_f[str_detect(all_beta_f, "pred_model_uncentered")], get_gc))   ## nolint
-# uncentered_inf_gc <- as.numeric(sapply(all_beta_f[str_detect(all_beta_f, "inf_model_uncentered")], get_gc))     ## nolint
-# all_centered_gc <- intersect(centered_pred_gc, centered_inf_gc)   ## nolint
-# all_uncentered_gc <- intersect(uncentered_inf_gc, uncentered_pred_gc) ## nolint
-# estimated_gc <- intersect(all_centered_gc, all_uncentered_gc)   ## nolint
+## find all catchments that were succesfully modeled under all four setups
+centered_pred_gc <- as.numeric(sapply(all_beta_f[str_detect(all_beta_f, "pred_model_centered")], get_gc))       ## nolint
+centered_inf_gc <- as.numeric(sapply(all_beta_f[str_detect(all_beta_f, "inf_model_centered")], get_gc))         ## nolint
+uncentered_pred_gc <- as.numeric(sapply(all_beta_f[str_detect(all_beta_f, "pred_model_uncentered")], get_gc))   ## nolint
+uncentered_inf_gc <- as.numeric(sapply(all_beta_f[str_detect(all_beta_f, "inf_model_uncentered")], get_gc))     ## nolint
+all_centered_gc <- intersect(centered_pred_gc, centered_inf_gc)   ## nolint
+all_uncentered_gc <- intersect(uncentered_inf_gc, uncentered_pred_gc) ## nolint
+estimated_gc <- intersect(all_centered_gc, all_uncentered_gc)   ## nolint
 
-centered_gc <- as.numeric(sapply(all_beta_f[str_detect(all_beta_f, "_centered_")], get_gc))   ## nolint
-uncentered_gc <- as.numeric(sapply(all_beta_f[str_detect(all_beta_f, "_uncentered_")], get_gc)) ## nolint
-estimated_gc <- intersect(centered_gc, uncentered_gc)
+# centered_gc <- as.numeric(sapply(all_beta_f[str_detect(all_beta_f, "_centered_")], get_gc))   ## nolint
+# uncentered_gc <- as.numeric(sapply(all_beta_f[str_detect(all_beta_f, "_uncentered_")], get_gc)) ## nolint
+# estimated_gc <- intersect(centered_gc, uncentered_gc)
 
 ## find intersection between mappable gridcodes and modeled gridcodes
 grids_to_cluster <- intersect(mapped_gc, estimated_gc)
@@ -314,8 +314,8 @@ precomputed_beta_plots <- setNames(vector("list", length(model_idents)),
                                    as.character(model_idents))
 precomputed_score_df <- data.frame(
   model_identifier = model_idents,
-  # pred_kge = rep(NA, n),                                                                                          ## nolint
-  # pred_r2 = rep(NA, n),                                                                                           ## nolint
+  pred_kge = rep(NA, n),
+  pred_r2 = rep(NA, n),
   inf_kge = rep(NA, n),
   inf_r2 = rep(NA, n)
 )
@@ -327,12 +327,12 @@ for (identifier in model_idents) {
   grid_i <- str_split(identifier, "_")[[1]][1]
   dszn_key_i <- str_split(identifier, "_")[[1]][2]
 
-  ## get predictive scores FIXME: uncomment this stuff once pred results are in
-  # load(paste0(beta_est_file_dir, "pred_model_", dszn_key_i, "_grid", grid_i, ".rda"))                             ## nolint
-  # precomputed_score_df[precomputed_score_df$model_identifier == identifier, "pred_r2"] <- model$scores$r2         ## nolint
-  # precomputed_score_df[precomputed_score_df$model_identifier == identifier, "pred_kge"] <- model$scores$kge       ## nolint
-  pred_r2 <- NA_real_ #round(model$scores$r2, 3)                                                                    ## nolint
-  pred_kge <- NA_real_ #round(model$scores$kge, 3)                                                                  ## nolint
+  # get predictive scores
+  load(paste0(beta_est_file_dir, "pred_model_", dszn_key_i, "_grid", grid_i, ".rda"))                             ## nolint
+  precomputed_score_df[precomputed_score_df$model_identifier == identifier, "pred_r2"] <- model$scores$r2         ## nolint
+  precomputed_score_df[precomputed_score_df$model_identifier == identifier, "pred_kge"] <- model$scores$kge       ## nolint
+  pred_r2 <- round(model$scores$r2, 3)                                                                    ## nolint
+  pred_kge <- round(model$scores$kge, 3)                                                                  ## nolint
 
   ## get inferential scores
   load(paste0(beta_est_file_dir, "inf_model_", dszn_key_i, "_grid", grid_i, ".rda"))                                ## nolint

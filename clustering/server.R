@@ -116,6 +116,8 @@ shinyServer(function(input, output, session) {
 
   ## render a heatmap based on the most recent clustering result
   ## this should be the third thing that runs after a new clust result returns
+  heatmap_click_data <- reactiveVal(NULL)
+  heatmap_revision <- 0
   observeEvent(list(
     clustering_result(),
     input$hide_outliers_toggle,
@@ -155,6 +157,70 @@ shinyServer(function(input, output, session) {
     )
     if (debugmode) cat("SERVER: done.\n")
 
+    heatmap_revision <- heatmap_revision + 1L
+    heatmap_sf_object$click_id <- paste0(
+      heatmap_revision, "_", seq_len(nrow(heatmap_sf_object))
+    )
+    # Use the same projected CRS used to construct the heatmap.
+    polygon_members <- sf::st_intersects(
+      sf::st_transform(heatmap_sf_object, 3857),
+      sf::st_transform(
+        sf::st_as_sf(
+          map_df,
+          coords = c("longitude", "latitude"),
+          crs = 4326
+        ),
+        3857
+      )
+    )
+
+    model_ids_by_polygon <- lapply(polygon_members, function(rows) {
+      unique(as.character(map_df$model_identifier[rows]))
+    })
+    cluster_ids_by_polygon <- lapply(polygon_members, function(rows) {
+      unique(as.character(map_df$cluster[rows]))
+    })
+
+    names(model_ids_by_polygon) <- heatmap_sf_object$click_id
+    names(cluster_ids_by_polygon) <- heatmap_sf_object$click_id
+    heatmap_click_data(list(
+      model_ids = model_ids_by_polygon,
+      cluster_ids = cluster_ids_by_polygon,
+      dszn_bool = clust_res$dszn_bool_vec
+    ))
+
+    # # Recalculated when clustering or heatmap geometry changes.
+    # cat("about to calculate polygon representatives...\n")
+    # representatives_by_polygon <- lapply(
+    #   model_ids_by_polygon,
+    #   function(model_ids) {
+    #     if (length(model_ids) == 0L) return(NULL)
+
+    #     betas <- precomputed_beta_matrix[
+    #       model_ids, , drop = FALSE
+    #     ]
+
+    #     distances <- clust_res$dist_mat[
+    #       model_ids, model_ids, drop = FALSE
+    #     ]
+
+    #     medoid_id <- model_ids[which.min(rowSums(distances))]
+
+    #     list(
+    #       n = length(model_ids),
+    #       medoid_id = medoid_id,
+    #       betas = list(
+    #         Mean = colMeans(betas),
+    #         Median = apply(betas, 2, stats::median),
+    #         Medoid = precomputed_beta_matrix[medoid_id, ]
+    #       )
+    #     )
+    #   }
+    # )
+    # cat("done.\n")
+
+    # heatmap_click_data(representatives_by_polygon)
+
     heatmap_pal <- colorFactor(
       palette = unname(clust_colors),
       domain = names(clust_colors)
@@ -183,6 +249,7 @@ shinyServer(function(input, output, session) {
       result <- leaflet(hm) |>
         addTiles() |>
         addPolygons(
+          layerId = ~click_id,
           fillColor = ~fill_colour,
           fillOpacity = 0.8,
           stroke = TRUE,
@@ -203,6 +270,313 @@ shinyServer(function(input, output, session) {
 
     cat("SERVER: heatmap construction finished...\n")
   }, ignoreInit = TRUE, priority = 8)
+
+  ## handle clicks on polygons in heatmap
+  # observeEvent(input$clustering_heatmap_shape_click, {
+  #   click <- input$clustering_heatmap_shape_click
+  #   state <- heatmap_click_data()
+  #   req(click$id, state)
+
+  #   model_ids <- state$model_ids[[as.character(click$id)]]
+  #   cluster_ids <- state$cluster_ids[[as.character(click$id)]]
+
+  #   # ignore clicks from an earlier rendering of the heatmap.
+  #   req(!is.null(model_ids))
+  #   req(!is.null(cluster_ids))
+
+  #   if (length(model_ids) == 0L) {
+  #     showNotification(
+  #       "No catchments are located in this polygon.",
+  #       type = "message"
+  #     )
+  #     return()
+  #   }
+
+  #   mean_beta <- calculate_mean_beta(
+  #     in_cluster_model_ids = model_ids,
+  #     dszn_bool = state$dszn_bool
+  #   )
+
+  #   mean_plot <- render_beta_and_derived_feats(
+  #     mean_beta,
+  #     calculate_plot_info(mean_beta)
+  #   )
+
+  #   output$heatmap_median_plot <- renderPlot({
+  #     grid::grid.newpage()
+  #     grid::grid.draw(mean_plot)
+  #   })
+
+  #   showModal(modalDialog(
+  #     title = paste0(
+  #       "Pointwise Mean — ",
+  #       length(model_ids),
+  #       " Catchment",
+  #       if (length(model_ids) == 1) "" else "s",
+  #       ", ", length(unique(cluster_ids)),
+  #       " Cluster",
+  #       if (length(unique(cluster_ids)) == 1) "" else "s"
+  #     ),
+  #     plotOutput("heatmap_median_plot", height = "500px"),
+  #     size = "l",
+  #     easyClose = TRUE,
+  #     footer = modalButton("Close")
+  #   ))
+  # }, ignoreInit = TRUE)
+
+  summary_types <- c("Mean", "Median", "Medoid")
+
+  summary_loading_ui <- function() {
+    div(
+      style = paste(
+        "height: 500px;",
+        "display: flex;",
+        "align-items: center;",
+        "justify-content: center;",
+        "gap: 12px;",
+        "font-size: 20px;",
+        "color: #666;"
+      ),
+      icon("spinner", class = "fa-spin"),
+      "Loading..."
+    )
+  }
+
+
+  summary_popup <- reactiveValues(
+    model_ids = NULL,
+    clustering = NULL,
+    index = 1L,
+    status = "loading",
+    error = NULL,
+    plot = NULL,
+    medoid_id = NULL
+  )
+
+  summary_plot_cache <- list()
+  summary_request <- 0L
+
+  output$heatmap_summary_label <- renderText({
+    ids <- req(summary_popup$model_ids)
+    type <- summary_types[summary_popup$index]
+
+    label <- paste0(
+      type, " — ", length(ids), " catchment",
+      if (length(ids) == 1L) "" else "s"
+    )
+
+    if (type == "Medoid" && !is.null(summary_popup$medoid_id)) {
+      label <- paste0(label, " — ", summary_popup$medoid_id)
+    }
+
+    label
+  })
+
+  output$heatmap_summary_plot <- renderPlot({
+    req(summary_popup$status == "ready")
+    req(summary_popup$plot)
+
+    grid::grid.newpage()
+    grid::grid.draw(summary_popup$plot)
+  })
+
+  queue_summary_plot <- function() {
+    ids <- isolate(summary_popup$model_ids)
+    clust <- isolate(summary_popup$clustering)
+    type <- summary_types[isolate(summary_popup$index)]
+    req(ids, clust)
+
+    summary_request <<- summary_request + 1   ## nolint
+    request_id <- summary_request
+
+    summary_popup$status <- "loading"
+    summary_popup$error <- NULL
+    summary_popup$plot <- NULL
+    summary_popup$medoid_id <- NULL
+    set_summary_body(summary_loading_ui())
+
+    # Send the loading UI before starting the calculation.
+    session$onFlushed(function() {
+      later::later(function() {
+        if (session$isClosed()) return()
+        if (request_id != summary_request) return()
+
+        tryCatch({
+          cached <- summary_plot_cache[[type]]
+
+          if (is.null(cached)) {
+            medoid_id <- NULL
+
+            if (type == "Medoid") {
+              distances <- clust$dist_mat[ids, ids, drop = FALSE]
+
+              medoid_id <- ids[which.min(rowSums(distances))]
+              beta <- precomputed_beta_matrix[medoid_id, ]
+            } else {
+              betas <- precomputed_beta_matrix[
+                ids, , drop = FALSE
+              ]
+
+              beta <- switch(
+                type,
+                Mean = colMeans(betas),
+                Median = apply(betas, 2, stats::median)
+              )
+            }
+
+            cached <- list(
+              plot = render_beta_and_derived_feats(
+                beta,
+                calculate_plot_info(beta)
+              ),
+              medoid_id = medoid_id
+            )
+
+            summary_plot_cache[[type]] <<- cached
+          }
+
+          if (request_id != summary_request) return()
+
+          summary_popup$plot <- cached$plot
+          summary_popup$medoid_id <- cached$medoid_id
+          summary_popup$status <- "ready"
+          set_summary_body(
+            plotOutput("heatmap_summary_plot", height = "500px")
+          )
+        }, error = function(e) {
+          if (request_id != summary_request) return()
+
+          summary_popup$error <- paste(
+            "Could not calculate this summary:",
+            conditionMessage(e)
+          )
+          summary_popup$status <- "error"
+          set_summary_body(
+            div(
+              style = "padding: 30px; color: #b00020;",
+              summary_popup$error
+            )
+          )
+        })
+      }, delay = 0.05)
+    }, once = TRUE)
+  }
+
+  set_summary_body <- function(ui) {
+    removeUI(
+      selector = "#heatmap_summary_body > *",
+      multiple = TRUE,
+      immediate = TRUE,
+      session = session
+    )
+
+    insertUI(
+      selector = "#heatmap_summary_body",
+      where = "beforeEnd",
+      ui = ui,
+      immediate = TRUE,
+      session = session
+    )
+  }
+
+  observeEvent(input$clustering_heatmap_shape_click, {
+    click <- input$clustering_heatmap_shape_click
+    state <- heatmap_click_data()
+    req(click$id, state)
+
+    ids <- state$model_ids[[as.character(click$id)]]
+
+    # Ignore clicks from an older heatmap rendering.
+    req(!is.null(ids))
+
+    if (length(ids) == 0L) {
+      showNotification(
+        "No catchments are located in this polygon.",
+        type = "message"
+      )
+      return()
+    }
+
+    clust <- req(clustering_result())
+
+    # Start a fresh cache for this polygon.
+    summary_plot_cache <<- list()
+
+    summary_popup$model_ids <- ids
+    summary_popup$clustering <- clust
+    summary_popup$index <- 2L  # Open on Median.
+    summary_popup$status <- "loading"
+    summary_popup$error <- NULL
+    summary_popup$plot <- NULL
+    summary_popup$medoid_id <- NULL
+
+    showModal(modalDialog(
+      title = "Catchment summaries",
+
+      div(
+        style = paste(
+          "display: flex;",
+          "align-items: center;",
+          "justify-content: space-between;",
+          "gap: 16px;",
+          "margin-bottom: 12px;"
+        ),
+
+        actionButton(
+          "heatmap_summary_previous",
+          label = NULL,
+          icon = icon("chevron-left"),
+          title = "Previous summary"
+        ),
+
+        div(
+          style = "flex: 1; text-align: center; font-weight: 600;",
+          textOutput("heatmap_summary_label")
+        ),
+
+        actionButton(
+          "heatmap_summary_next",
+          label = NULL,
+          icon = icon("chevron-right"),
+          title = "Next summary"
+        )
+      ),
+
+      div(
+        id = "heatmap_summary_body",
+        summary_loading_ui()
+      ),
+
+      size = "l",
+      easyClose = TRUE,
+      footer = modalButton("Close")
+    ))
+
+    queue_summary_plot()
+  }, ignoreInit = TRUE)
+
+
+  observeEvent(input$heatmap_summary_previous, {
+    req(summary_popup$model_ids)
+
+    summary_popup$index <- (
+      (summary_popup$index - 2L) %% length(summary_types)
+    ) + 1L
+
+    queue_summary_plot()
+  }, ignoreInit = TRUE)
+
+
+  observeEvent(input$heatmap_summary_next, {
+    req(summary_popup$model_ids)
+
+    summary_popup$index <- (
+      summary_popup$index %% length(summary_types)
+    ) + 1L
+
+    queue_summary_plot()
+  }, ignoreInit = TRUE)
+
 
   ## handle map marker clicks and popup graph displays for beta surface
   ## and derived features
@@ -299,6 +673,35 @@ shinyServer(function(input, output, session) {
     }
   })
 
+  ## render (& reactively re-render) color scheme selection UI
+  output$coloring_regime_tuner_UI <- renderUI({
+    if (debugmode) cat("SERVER: running color scheme tuning UI update with coloring_regime:", input$coloring_regime, "\n")  ## nolint
+
+    if (input$coloring_regime != "Cluster Membership") {
+      fluidRow(
+        sliderInput(
+          inputId = "kge_goodness_thresh",
+          label = "Break Point Between Bad (Red) and Good (Green) Values of Selected Coloring Feature", ## nolint
+          min = 0,
+          max = 1,
+          value = 0.2,
+          step = 0.05
+        )
+      )
+    } else {
+      fluidRow(
+        checkboxInput(
+          inputId = "hide_outliers_toggle",
+          label = "Hide Outliers",
+          value = TRUE
+        )
+      )
+    }
+  })
+  ## make sure that opening the display option accordion panel doesn't
+  ## trigger an update for the dynamic UI and cause random map rerendering
+  outputOptions(output, "coloring_regime_tuner_UI", suspendWhenHidden = FALSE)
+
   ## render (& reactively re-render) representative explorer UI
   ## based on clustering results
   observeEvent(clustering_result(), {
@@ -336,7 +739,7 @@ shinyServer(function(input, output, session) {
             column(selectInput(
               inputId = "selected_rep_type",
               label = "Select Representative Type",
-              choices = c("", "Medoid", "Median"),
+              choices = c("", "Medoid", "Median", "Mean"),
               selected = ""
             ), width = 6),
             column(selectInput(
@@ -357,35 +760,6 @@ shinyServer(function(input, output, session) {
       }
     })
   }, ignoreInit = TRUE)
-
-  ## render (& reactively re-render) color scheme selection UI
-  output$coloring_regime_tuner_UI <- renderUI({
-    if (debugmode) cat("SERVER: running color scheme tuning UI update with coloring_regime:", input$coloring_regime, "\n")  ## nolint
-
-    if (input$coloring_regime != "Cluster Membership") {
-      fluidRow(
-        sliderInput(
-          inputId = "kge_goodness_thresh",
-          label = "Break Point Between Bad (Red) and Good (Green) Values of Selected Coloring Feature", ## nolint
-          min = 0,
-          max = 1,
-          value = 0.2,
-          step = 0.05
-        )
-      )
-    } else {
-      fluidRow(
-        checkboxInput(
-          inputId = "hide_outliers_toggle",
-          label = "Hide Outliers",
-          value = TRUE
-        )
-      )
-    }
-  })
-  ## make sure that opening the display option accordion panel doesn't
-  ## trigger an update for the dynamic UI and cause random map rerendering
-  outputOptions(output, "coloring_regime_tuner_UI", suspendWhenHidden = FALSE)
 
   ## observe selected_rep_type (built inside of UI above)
   ## and keep selected_representative up to date
@@ -526,6 +900,23 @@ shinyServer(function(input, output, session) {
               grid::grid.newpage()
               grid::grid.draw(plt)
             })
+          } else if (rep_info$type == "Mean") {
+            new_rep <- calculate_mean_beta(
+              in_cluster_model_ids = in_cluster_grids_i,
+              dszn_bool = res_i$dszn_bool_vec
+            )
+            current_rep_cache[[paste0(rep_info$type, rep_info$cluster)]] <- new_rep                                     ## nolint
+            cluster_rep_cache(current_rep_cache)
+            plt <- render_beta_and_derived_feats(
+              new_rep,
+              calculate_plot_info(
+                new_rep
+              )
+            )
+            output$representative_plot_display <- renderPlot({
+              grid::grid.newpage()
+              grid::grid.draw(plt)
+            })
           } else {
             stop("invalid representative type (",
                  rep_info$type,
@@ -616,89 +1007,182 @@ shinyServer(function(input, output, session) {
     clustering_result(new_clustering_res)
   }, ignoreInit = FALSE)
 
-  ## preset button one (all equal feature weights + hclust)
-  observeEvent(input$preset_1, {
-    updateSliderInput(session, "delta_l2_wt", value = 1)
-    updateSliderInput(session, "delta_l1_wt", value = 1)
-    updateSliderInput(session, "delta_cheby_wt", value = 1)
-    updateSliderInput(session, "delta_scaled_cheby_wt", value = 1)
+  ## helper function for presets that takes a list of named
+  ## values for the applet and sets all relevant inputs to them
+  make_settings <- function(settings_list) {
+    ## distance function component weights
+    updateSliderInput(session, "delta_l2_wt",
+                      value = settings_list$delta_l2_wt)
+    updateSliderInput(session, "delta_l1_wt",
+                      value = settings_list$delta_l1_wt)
+    updateSliderInput(session,
+                      "delta_cheby_wt",
+                      value = settings_list$delta_cheby_wt)
+    updateSliderInput(session,
+                      "delta_scaled_cheby_wt",
+                      value = settings_list$delta_scaled_cheby_wt)
+    updateSliderInput(session,
+                      "smooth_delta_l2_wt",
+                      value = settings_list$smooth_delta_l2_wt)
+    updateSliderInput(session,
+                      "smooth_delta_l1_wt",
+                      value = settings_list$smooth_delta_l2_wt)
+    updateSliderInput(session,
+                      "smooth_delta_cheby_wt",
+                      value = settings_list$smooth_delta_cheby_wt)
+    updateSliderInput(session,
+                      "smooth_delta_scaled_cheby_wt",
+                      value = settings_list$smooth_delta_scaled_cheby_wt)
+    updateSliderInput(session,
+                      "sme_l2_wt",
+                      value = settings_list$sme_l2_wt)
+    updateSliderInput(session,
+                      "sme_l1_wt",
+                      value = settings_list$sme_l1_wt)
+    updateSliderInput(session,
+                      "sme_cheby_wt",
+                      value = settings_list$sme_cheby_wt)
+    updateSliderInput(session,
+                      "sme_scaled_cheby_wt",
+                      value = settings_list$sme_scaled_cheby_wt)
+    updateSliderInput(session,
+                      "tt_l2_wt",
+                      value = settings_list$tt_l2_wt)
+    updateSliderInput(session,
+                      "tt_l1_wt",
+                      value = settings_list$tt_l1_wt)
+    updateSliderInput(session,
+                      "tt_cheby_wt",
+                      value = settings_list$tt_cheby_wt)
+    updateSliderInput(session,
+                      "tt_scaled_cheby_wt",
+                      value = settings_list$tt_scaled_cheby_wt)
+    updateSliderInput(session,
+                      "global_l2_wt",
+                      value = settings_list$global_l2_wt)
 
-    updateSliderInput(session, "smooth_delta_l2_wt", value = 1)
-    updateSliderInput(session, "smooth_delta_l1_wt", value = 1)
-    updateSliderInput(session, "smooth_delta_cheby_wt", value = 1)
-    updateSliderInput(session, "smooth_delta_scaled_cheby_wt", value = 1)
+    ## clustering algorithm hyperparams
+    updateSliderInput(session,
+                      "n_pts_core",
+                      value = settings_list$n_pts_core)
+    updateSliderInput(session,
+                      "n_pts_clust",
+                      value = settings_list$n_pts_clust)
+    updateSelectInput(session,
+                      "linkage_method",
+                      selected = settings_list$linkage_method)
+    updateSliderInput(session,
+                      "n_clusts_hclust",
+                      value = settings_list$n_clusts_hclust)
+    updateSliderInput(session,
+                     "n_clusts_kmedoids",
+                     value = settings_list$n_clusts_kmedoids)
+    updateSelectInput(session,
+                      "clust_algo",
+                      selected = settings_list$clust_algo)
 
-    updateSliderInput(session, "sme_l2_wt", value = 1)
-    updateSliderInput(session, "sme_l1_wt", value = 1)
-    updateSliderInput(session, "sme_cheby_wt", value = 1)
-    updateSliderInput(session, "sme_cheby_wt", value = 1)
+    ## other clustering-relevant inputs
+    updateSelectInput(session,
+                      "comb_func",
+                      selected = settings_list$comb_func)
+    updateSliderInput(session,
+                      "min_kge_for_clust",
+                      value = settings_list$min_kge_for_clust)
+    updateCheckboxInput(session,
+                        "remove_negative_beta_ests",
+                        value = settings_list$remove_negative_beta_ests)
+    updateSliderInput(session,
+                      "pre_clust_outlier_trim",
+                      value = settings_list$pre_clust_outlier_trim)
+    updateSliderInput(session,
+                      "pre_clust_outlier_neighbor_index",
+                      value = settings_list$pre_clust_outlier_neighbor_index)   ## nolint
 
-    updateSliderInput(session, "tt_l2_wt", value = 1)
-    updateSliderInput(session, "tt_l1_wt", value = 1)
-    updateSliderInput(session, "tt_cheby_wt", value = 1)
-    updateSliderInput(session, "tt_cheby_wt", value = 1)
-
-    updateSliderInput(session, "global_l2_wt", value = 1)
-
-    updateSliderInput(session, "n_pts_core", value = 3)
-    updateSliderInput(session, "n_pts_clust", value = 9)
-
-    updateSelectInput(session, "linkage_method", selected = "ward.D2")
-    updateSliderInput(session, "n_clusts_hclust", value = 8)
-
-    updateSelectInput(session, "clust_algo", selected = "Hierarchical")
-
-    updateSelectInput(session, "comb_func", selected = "eCDF(+)")
-    updateSliderInput(session, "min_kge_for_clust", value = 0.4)
-    updateCheckboxInput(session, "remove_negative_beta_ests", value = TRUE)
-
+    ## deseasonalization regime
     updateSelectInput(session, "deseasonalization_selection",
-                      selected = "Wherever Meaningfully Better Than Uncentered")
-    updateSliderInput(session, "dszn_thresh_selection", value = 0.15)
+                      selected = settings_list$deseasonalization_selection)     ## nolint
+    updateSliderInput(session, "dszn_thresh_selection",
+                      value = settings_list$dszn_thresh_selection)
 
-    updateSelectInput(session, "coloring_regime", selected = "Cluster Membership")
+    ## display parameters
+    updateSelectInput(session, "coloring_regime",
+                      selected = settings_list$coloring_regime)
+    updateSliderInput(session, "heatmap_grid_size",
+                      value = settings_list$heatmap_grid_size)
+  }
+
+  ## default button (resets all values to those in INITCLUSTERSETTINGS)
+  observeEvent(input$default_settings, {
+    make_settings(INITCLUSTERSETTINGS)
   }, ignoreInit = TRUE)
 
-  ## preset button two (just use global l2 + hclust)
+  ## preset button one:
+  ## all features weighted equally and combined with "+"
+  ## all catchments > 0.3 KGE considered
+  ## remove negative B(s, t) estimates
+  ## 5% outlier trimming with k = 2
+  ## use whichever (centered, uncentered) has higher inf kge
+  ## default heatmap grid size
+  ## color according to cluster membership
+  ## cluster using hclust with 12 clusters
+  observeEvent(input$preset_1, {
+    settings_to_use <- c(
+      setNames(as.list(
+        rep(1, 17)
+      ), all_feat_weight_names),
+      list(
+        comb_func = "+",
+        clust_algo = "Hierarchical",
+        n_pts_core = 2,
+        n_pts_clust = 10,
+        linkage_method = "ward.D2",
+        n_clusts_hclust = 12,
+        n_clusts_kmedoids = 12,
+        deseasonalization_selection = "Wherever Meaningfully Better Than Uncentered",                                                     ## nolint
+        dszn_thresh_selection = 0,
+        min_kge_for_clust = 0.3,
+        pre_clust_outlier_trim = 0.05,
+        pre_clust_outlier_neighbor_index = 2,
+        remove_negative_beta_ests = TRUE,
+        heatmap_grid_size = INITCLUSTERSETTINGS$heatmap_grid_size,
+        coloring_regime = "Cluster Membership"
+      )
+    )
+    make_settings(settings_to_use)
+  }, ignoreInit = TRUE)
+
+  ## preset button two:
+  ## only use global L2
+  ## all catchments > 0 KGE considered
+  ## remove negative B(s, t) estimates
+  ## 5% outlier trimming with k = 2
+  ## use whichever (centered, uncentered) has higher inf kge
+  ## default heatmap grid size
+  ## color according to cluster membership
+  ## cluster using hclust with 12 clusters
   observeEvent(input$preset_2, {
-    updateSliderInput(session, "delta_l2_wt", value = 0)
-    updateSliderInput(session, "delta_l1_wt", value = 0)
-    updateSliderInput(session, "delta_cheby_wt", value = 0)
-    updateSliderInput(session, "delta_scaled_cheby_wt", value = 0)
-
-    updateSliderInput(session, "smooth_delta_l2_wt", value = 0)
-    updateSliderInput(session, "smooth_delta_l1_wt", value = 0)
-    updateSliderInput(session, "smooth_delta_cheby_wt", value = 0)
-    updateSliderInput(session, "smooth_delta_scaled_cheby_wt", value = 0)
-
-    updateSliderInput(session, "sme_l2_wt", value = 0)
-    updateSliderInput(session, "sme_l1_wt", value = 0)
-    updateSliderInput(session, "sme_cheby_wt", value = 0)
-    updateSliderInput(session, "sme_cheby_wt", value = 0)
-
-    updateSliderInput(session, "tt_l2_wt", value = 0)
-    updateSliderInput(session, "tt_l1_wt", value = 0)
-    updateSliderInput(session, "tt_cheby_wt", value = 0)
-    updateSliderInput(session, "tt_cheby_wt", value = 0)
-
-    updateSliderInput(session, "global_l2_wt", value = 1)
-
-    updateSliderInput(session, "n_pts_core", value = 3)
-    updateSliderInput(session, "n_pts_clust", value = 9)
-
-    updateSelectInput(session, "linkage_method", selected = "ward.D2")
-    updateSliderInput(session, "n_clusts_hclust", value = 8)
-
-    updateSelectInput(session, "clust_algo", selected = "Hierarchical")
-
-    updateSelectInput(session, "comb_func", selected = "+")
-    updateSliderInput(session, "min_kge_for_clust", value = 0.2)
-    updateCheckboxInput(session, "remove_negative_beta_ests", value = TRUE)
-
-    updateSelectInput(session, "deseasonalization_selection",
-                      selected = "Wherever Not Meaningfully Worse Than Uncentered")   ## nolint
-    updateSliderInput(session, "dszn_thresh_selection", value = 0.05)
-
-    updateSelectInput(session, "coloring_regime", selected = "Cluster Membership")    ## nolint
+    settings_to_use <- c(
+      setNames(as.list(
+        c(rep(0, 16), 1)
+      ), all_feat_weight_names),
+      list(
+        comb_func = "+",
+        clust_algo = "Hierarchical",
+        n_pts_core = 2,
+        n_pts_clust = 10,
+        linkage_method = "ward.D2",
+        n_clusts_hclust = 12,
+        n_clusts_kmedoids = 12,
+        deseasonalization_selection = "Wherever Meaningfully Better Than Uncentered",                                                     ## nolint
+        dszn_thresh_selection = 0,
+        min_kge_for_clust = 0.3,
+        pre_clust_outlier_trim = 0.05,
+        pre_clust_outlier_neighbor_index = 2,
+        remove_negative_beta_ests = TRUE,
+        heatmap_grid_size = INITCLUSTERSETTINGS$heatmap_grid_size,
+        coloring_regime = "Cluster Membership"
+      )
+    )
+    make_settings(settings_to_use)
   }, ignoreInit = TRUE)
 })

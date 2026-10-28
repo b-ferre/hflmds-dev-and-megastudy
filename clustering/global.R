@@ -73,7 +73,11 @@ INITCLUSTERSETTINGS <- c(                                                       
     deseasonalization_selection = "Wherever Meaningfully Better Than Uncentered",                                                     ## nolint
     dszn_thresh_selection = 0,
     min_kge_for_clust = 0.4,
-    remove_negative_beta_ests = TRUE
+    pre_clust_outlier_trim = 0.10,
+    pre_clust_outlier_neighbor_index = 2,
+    remove_negative_beta_ests = TRUE,
+    heatmap_grid_size = 2,
+    coloring_regime = "Cluster Membership"
   )
 )
 debugmode <- TRUE
@@ -765,6 +769,19 @@ calculate_median_beta <- function(in_cluster_model_ids, dszn_bool) {
   apply(precomputed_beta_matrix[in_cluster_model_ids, , drop = FALSE], 2, function(column) {                  ## nolint
     median(column)
   })
+}
+
+#' @param in_cluster_grids is a character vector of gridcodes that form a
+#' cluster
+#'
+#' @return a flattened, lag-minor indexed B(s, t) surface which is the
+#' point-wise mean of the B(s, t) surfaces of the catchments in the cluster
+calculate_mean_beta <- function(in_cluster_model_ids, dszn_bool) {
+  if (any(!is.character(in_cluster_model_ids))) {
+    stop("Error in calculate_mean_beta : in_cluster_grids must be a character vector")                                            ## nolint
+  }
+
+  as.numeric(colMeans(precomputed_beta_matrix[in_cluster_model_ids, , drop = FALSE]))
 }
 
 #' @param in_cluster_grids is a character vector of gridcodes that form an

@@ -194,12 +194,16 @@ shinyUI(fluidPage(
           sliderInput(
             inputId = "pre_clust_outlier_trim",
             label = "Pre-Clustering Outlier Filtering Quantile",
-            min = 0, max = 1, value = 0.3, step = 0.01
+            min = 0, max = 1,
+            value = INITCLUSTERSETTINGS$pre_clust_outlier_trim,
+            step = 0.01
           ),
           sliderInput(
             inputId = "pre_clust_outlier_neighbor_index",
             label = "Pre-Clustering Outlier Filtering Neighbor Index",
-            min = 2, max = 10, value = 2, step = 1
+            min = 2, max = 10,
+            value = INITCLUSTERSETTINGS$pre_clust_outlier_neighbor_index,
+            step = 1
           )
         ),
         ## other params (dist comb, kge threshing, and dszn regime)
@@ -257,7 +261,7 @@ shinyUI(fluidPage(
                 "Uncentered KGE - Centered KGE"
                 #"Inferential KGE - Seasonal Mean KGE"
               ),
-              selected = "Cluster Membership"
+              selected = INITCLUSTERSETTINGS$coloring_regime
             )
           ),
           fluidRow(
@@ -269,12 +273,16 @@ shinyUI(fluidPage(
           title = "Preset Selection",
           fluidRow(
             actionButton(
+              inputId = "default_settings",
+              label = "Default Clustering Settings"
+            ),
+            actionButton(
               inputId = "preset_1",
-              label = "Preset 1"
+              label = "Preset 1 (Equal Weights, Hierarchical)"
             ),
             actionButton(
               inputId = "preset_2",
-              label = "Preset 2"
+              label = "Preset 2 (Global L2 Only, Hierarchical)"
             )
           )
         ),
@@ -324,7 +332,9 @@ shinyUI(fluidPage(
             column(sliderInput(
               inputId = "heatmap_grid_size",
               label = "Heatmap Grid Size (km, Log Base 10 Scale)",
-              min = 1, max = 3, value = 2.5, step = 0.01,
+              min = 1, max = 3,
+              value = INITCLUSTERSETTINGS$heatmap_grid_size,
+              step = 0.01,
               width = "100%"
             ), width = 12)
           ),
