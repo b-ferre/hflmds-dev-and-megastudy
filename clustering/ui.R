@@ -258,6 +258,8 @@ shinyUI(fluidPage(
               choices = c(
                 "Cluster Membership",
                 "Inferential KGE",
+                "Predictive KGE",
+                "Predictive KGE - Inferential KGE",
                 "Uncentered KGE - Centered KGE"
                 #"Inferential KGE - Seasonal Mean KGE"
               ),

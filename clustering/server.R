@@ -78,6 +78,18 @@ shinyServer(function(input, output, session) {
       map_df$opacity <- rep(1, nrow(map_df))
       map_df$radius <- rep(3, nrow(map_df))
 
+    } else if (input$coloring_regime == "Predictive KGE") {
+      kge_goodness_thresh <- input$kge_goodness_thresh
+      req(kge_goodness_thresh)
+
+      scores <- precomputed_score_df$pred_kge[
+        precomputed_score_df$model_identifier %in% considered_catchments
+      ]
+
+      map_df$color <- map_scores_to_rg_pal(scores, threshold = kge_goodness_thresh)                                             ## nolint
+      map_df$opacity <- rep(1, nrow(map_df))
+      map_df$radius <- rep(3, nrow(map_df))
+
     } else if (input$coloring_regime == "Uncentered KGE - Centered KGE") {
 
       cent_scores <- as.numeric(sapply(unique_gridcodes, function(gc_i_) {
@@ -95,7 +107,28 @@ shinyServer(function(input, output, session) {
       map_df$color <- map_scores_to_rg_pal(scores, threshold = 0)
       map_df$opacity <- rep(1, nrow(map_df))
       map_df$radius <- rep(3, nrow(map_df))
+    } else if (input$coloring_regime == "Predictive KGE - Inferential KGE") {
+      pred_scores <- precomputed_score_df$pred_kge[
+        precomputed_score_df$model_identifier %in% considered_catchments
+      ]
+      inf_scores <- precomputed_score_df$inf_kge[
+        precomputed_score_df$model_identifier %in% considered_catchments
+      ]
+      scores <- pred_scores - inf_scores
+
+      map_df$color <- map_scores_to_rg_pal(scores, threshold = 0)                                             ## nolint
+      map_df$opacity <- rep(1, nrow(map_df))
+      map_df$radius <- rep(3, nrow(map_df))
+    } else {
+      stop(paste0("invalid color_regime (",
+                  input$coloring_regime,
+                  ") passed to map generation in server.\n"))
     }
+
+
+
+
+
 
     output$clustering_map <- renderLeaflet({
       leaflet() |>

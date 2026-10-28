@@ -781,7 +781,7 @@ calculate_mean_beta <- function(in_cluster_model_ids, dszn_bool) {
     stop("Error in calculate_mean_beta : in_cluster_grids must be a character vector")                                            ## nolint
   }
 
-  as.numeric(colMeans(precomputed_beta_matrix[in_cluster_model_ids, , drop = FALSE]))
+  as.numeric(colMeans(precomputed_beta_matrix[in_cluster_model_ids, , drop = FALSE]))   ## nolint
 }
 
 #' @param in_cluster_grids is a character vector of gridcodes that form an
