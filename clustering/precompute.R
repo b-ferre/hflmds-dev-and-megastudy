@@ -255,7 +255,7 @@ precomputed_feature_dist_mats$smooth_delta_l2 <- fast_distance(smooth_delta_mtx,
 precomputed_feature_dist_mats$smooth_delta_l1 <- fast_distance(smooth_delta_mtx, "manhattan")                                     ## nolint
 precomputed_feature_dist_mats$smooth_delta_cheby <- fast_distance(smooth_delta_mtx, "maximum")                                    ## nolint
 precomputed_feature_dist_mats$smooth_delta_scaled_cheby <- scale_chebyshev(
-  precomputed_feature_dist_mats$delta_cheby, smooth_delta_mtx
+  precomputed_feature_dist_mats$smooth_delta_cheby, smooth_delta_mtx
 )
 
 cat("Computing Pairwise SME Distances...\n")

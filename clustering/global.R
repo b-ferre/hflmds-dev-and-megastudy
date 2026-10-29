@@ -1,3 +1,14 @@
+###############################################################################
+############################# RETICULATE STUFF ################################
+###############################################################################
+
+library(reticulate)
+hdbscan <- reticulate::import("hdbscan")
+
+###############################################################################
+######################### OTHER LIBRARIES/HELPERS #############################
+###############################################################################
+
 library(shiny)
 library(leaflet)
 library(RColorBrewer)
@@ -11,7 +22,6 @@ library(future)
 library(ggplotify)
 library(patchwork)
 library(bslib)
-library(reticulate)
 library(sf)
 library(cluster)
 library(dplyr)
@@ -595,71 +605,48 @@ get_pairwise_distance_mtx <- function(model_ids, featwts, comb_func) {
     names(featwts) <- names(precomputed_feature_dist_mats)                                                                            ## nolint
   }
 
-  weighted_dist_components <- lapply(names(precomputed_feature_dist_mats),                                                            ## nolint
-                                     function(name_j) {
-                                       feat_mat_j <- precomputed_feature_dist_mats[[name_j]][model_ids, model_ids, drop = FALSE]  ## nolint
-                                       featwts[[name_j]] * feat_mat_j
-                                     })
-
   # helper function which converts every entry in a matrix to its
   # empirical CDF value across all matrix values
   rank_matrix_cdf <- function(mat) {
-    # Validate input
-    if (!is.matrix(mat)) {
-      stop("Input must be a matrix.")
+    stopifnot(is.matrix(mat), nrow(mat) == ncol(mat))
+
+    upper <- upper.tri(mat)
+    vals <- mat[upper]
+
+    if (any(!is.finite(vals))) {
+      stop("Distance matrix contains non-finite off-diagonal values.")
     }
-    # Flatten the matrix into a vector
-    vals <- as.numeric(mat)
-    # Handle NA values separately
-    if (anyNA(vals)) {
-      warning("NA values detected; they will remain NA in the output.")
+
+    result <- matrix(
+      0,
+      nrow = nrow(mat),
+      ncol = ncol(mat),
+      dimnames = dimnames(mat)
+    )
+
+    if (length(vals)) {
+      result[upper] <- rank(vals, ties.method = "average") / length(vals)
+      result <- result + t(result)
     }
-    # Compute empirical CDF ranks
-    ranks <- rank(vals, ties.method = "average", na.last = "keep") / sum(!is.na(vals))                                                ## nolint
-    # Reshape back to original matrix dimensions
-    result <- matrix(ranks, nrow = nrow(mat), ncol = ncol(mat))
+
     result
   }
 
-  if (comb_func == "+") {
+  weighted_dist_components <- lapply(names(precomputed_feature_dist_mats),                                                            ## nolint
+                                     function(name_j) {
+                                       feat_mat_j <- precomputed_feature_dist_mats[[name_j]][model_ids, model_ids, drop = FALSE]  ## nolint
+                                       if (comb_func == "+(eCDF)") {
+                                        feat_mat_j <- rank_matrix_cdf(feat_mat_j)
+                                       }
+                                       featwts[[name_j]] * feat_mat_j
+                                     })
+
+  if (comb_func %in% c("+", "+(eCDF)")) {
     plus_mat <- Reduce("+", weighted_dist_components)
     return(plus_mat) ## nolint
   } else if (comb_func == "eCDF(+)") {
     plus_mat <- Reduce("+", weighted_dist_components)
     new_mat <- rank_matrix_cdf(plus_mat)
-    dimnames(new_mat) <- dimnames(plus_mat)
-    return(new_mat) ## nolint
-  } else if (comb_func == "eCDF(+(eCDF))") {
-    weighted_dist_components <- lapply(seq_along(weighted_dist_components), function(i) {   ## nolint
-      m_i <- weighted_dist_components[[i]]
-
-      if (any(!is.finite(m_i))) {
-        stop(paste0("ERROR: non-finite values in component", names(weighted_dist_components)[i]))   ## nolint
-      }
-      transf_m_i <- rank_matrix_cdf(m_i)
-      dimnames(transf_m_i) <- dimnames(m_i)
-      as.matrix(transf_m_i)
-    })
-    plus_mat <- Reduce("+", weighted_dist_components)
-    new_mat <- rank_matrix_cdf(plus_mat)
-    dimnames(new_mat) <- dimnames(plus_mat)
-    return(new_mat) ## nolint"
-  } else if (comb_func == "+(eCDF)") {
-    weighted_dist_components <- lapply(seq_along(weighted_dist_components), function(i) {   ## nolint
-      m_i <- weighted_dist_components[[i]]
-
-      if (any(!is.finite(m_i))) {
-        stop(paste0("ERROR: non-finite values in component", names(weighted_dist_components)[i]))   ## nolint
-      }
-      transf_m_i <- rank_matrix_cdf(m_i)
-      dimnames(transf_m_i) <- dimnames(m_i)
-      as.matrix(transf_m_i)
-    })
-    new_mat <- Reduce("+", weighted_dist_components)
-    return(new_mat) ## nolint"
-  } else if (comb_func == "(0.8)eCDF(+) + (0.2)(+)") {
-    plus_mat <- Reduce("+", weighted_dist_components)
-    new_mat <- (0.8 * rank_matrix_cdf(plus_mat)) + (0.2 * plus_mat)
     dimnames(new_mat) <- dimnames(plus_mat)
     return(new_mat) ## nolint
   } else {
@@ -684,8 +671,6 @@ get_hdbscan_labels <- function(dist_mat,
   ## check dist_mat for any issues
   stopifnot(colnames(dist_mat) == rownames(dist_mat))
   stopifnot(dim(dist_mat)[1] == dim(dist_mat)[2])
-
-  hdbscan <- import("hdbscan")
 
   clusterer <- hdbscan$HDBSCAN(
     min_cluster_size = as.integer(n_pts_clust),

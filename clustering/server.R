@@ -1077,7 +1077,7 @@ shinyServer(function(input, output, session) {
                       value = settings_list$smooth_delta_l2_wt)
     updateSliderInput(session,
                       "smooth_delta_l1_wt",
-                      value = settings_list$smooth_delta_l2_wt)
+                      value = settings_list$smooth_delta_l1_wt)
     updateSliderInput(session,
                       "smooth_delta_cheby_wt",
                       value = settings_list$smooth_delta_cheby_wt)
