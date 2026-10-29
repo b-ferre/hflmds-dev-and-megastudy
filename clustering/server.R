@@ -281,14 +281,32 @@ shinyServer(function(input, output, session) {
 
       result <- leaflet(hm) |>
         addTiles() |>
+        # Explicit panes keep catchment dots beneath the grid polygons.
+        addMapPane("catchmentDots", zIndex = 410) |>
+        addMapPane("heatmapPolygons", zIndex = 420) |>
+        addCircleMarkers(
+          data = map_df,
+          lng = ~longitude,
+          lat = ~latitude,
+          radius = 1,
+          stroke = FALSE,
+          fillColor = "#000000",
+          fillOpacity = 1,
+          group = "CatchmentDots",
+          options = pathOptions(
+            pane = "catchmentDots",
+            interactive = FALSE
+          )
+        ) |>
         addPolygons(
           layerId = ~click_id,
           fillColor = ~fill_colour,
-          fillOpacity = 0.8,
+          fillOpacity = ~opacity,
           stroke = TRUE,
           color = "#333333",
           weight = 1,
-          group = "HeatmapLayer"
+          group = "HeatmapLayer",
+          options = pathOptions(pane = "heatmapPolygons")
         ) |>
         fitBounds(
           lng1 = unname(bb["xmin"]),

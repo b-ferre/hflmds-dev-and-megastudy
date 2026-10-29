@@ -895,7 +895,7 @@ generate_heatmap_layer <- function(catchments_sf,
   preset_radius <- preset_radius_km * 1000
 
   MAX_OPACITY <- 0.7  ## corresponds to areas that are 100% dominated by one cluster                ## nolint
-  MIN_OPACITY <- 0.3  ## corresponds to areas that are equally populated by two or more clusters    ## nolint
+  MIN_OPACITY <- 0.0  ## corresponds to areas that are equally populated by two or more clusters    ## nolint
 
   ## project coords to mercator for calculations
   catchments_sf <- st_transform(catchments_sf, 3857)
