@@ -761,7 +761,7 @@ shinyServer(function(input, output, session) {
 
       res_i <- req(clustering_result())
       cluster_ids <- sort(unique(res_i$labels[res_i$labels > 0]))
-      cluster_colors <- res_i$clust_colors
+      cluster_colors <- res_i$clust_colors[as.character(cluster_ids)]
       nclusters <- length(cluster_ids)
 
       if (nclusters > 0) {
@@ -1126,7 +1126,7 @@ shinyServer(function(input, output, session) {
                       "n_clusts_hclust",
                       value = settings_list$n_clusts_hclust)
     updateSliderInput(session,
-                     "n_clusts_kmedoids",
+                      "n_clusts_kmedoids",
                      value = settings_list$n_clusts_kmedoids)
     updateSelectInput(session,
                       "clust_algo",
