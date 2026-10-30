@@ -221,6 +221,7 @@ perform_fit <- function(m, max_lag, ars = 0,
   design_mat <- fit_mats$design_matrix
   y_trunc <- fit_mats$y_trunc
 
+  # [Z.T @ Z + exp(w_h) * D_h.T @ D_h + exp(w_v) * D_v.T @ D_v] @ b = Z.T @ y
   lhs <- crossprod(design_mat) +
     exp(w_h) * crossprod(d_h) +
     exp(w_v) * crossprod(d_v)

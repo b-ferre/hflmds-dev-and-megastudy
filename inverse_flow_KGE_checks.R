@@ -1,4 +1,5 @@
-## compare the predictive and inferential models on the PREDICTIVE dataset to account for sampling weirdness  ## nolint
+## investigate how inverse KGE looks for my models based on thw knowledge
+## that this does better to emphasize low flows
 
 library(stringr)
 library(Matrix)
@@ -82,22 +83,12 @@ calculate_predictive_kge <- function(bvec, x, y,
   KGE(sim = as.numeric(pred_y), obs = as.numeric(y_trunc))
 }
 
-
-known_scores <- readRDS("./clustering/precomputed_score_df.rds")
-
-dszn_key <- "uncentered"
-beta_dir <- "./results/"
-
+beta_dir <- "./results"
+scores <- readRDS("./clustering/precomputed_score_df.rds")
 get_gc <- function(fn) str_remove_all(fn, "[^\\d]")
-all_beta_files <- list.files("./results")
-pred_modeled <- sapply(all_beta_files[str_detect(all_beta_files, paste0("pred_model_", dszn_key))], get_gc)
-inf_modeled <- sapply(all_beta_files[str_detect(all_beta_files, paste0("inf_model_", dszn_key))], get_gc)
-to_check <- intersect(pred_modeled, inf_modeled)
+all_beta_files <- list.files(beta_dir)
 
-#to_check <- sample(to_check, size = 300)
-n <- length(to_check)
-
-check_results <- data.frame(
+scores_ext <- data.frame(
   gridcode = to_check,
   true_pred_kge = rep(NA, n),
   check_pred_kge = rep(NA, n),

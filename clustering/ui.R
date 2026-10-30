@@ -260,8 +260,8 @@ shinyUI(fluidPage(
                 "Inferential KGE",
                 "Predictive KGE",
                 "Predictive KGE - Inferential KGE",
-                "Uncentered KGE - Centered KGE"
-                #"Inferential KGE - Seasonal Mean KGE"
+                "Uncentered KGE - Centered KGE",
+                "Inferential KGE - Benchmark KGE"
               ),
               selected = INITCLUSTERSETTINGS$coloring_regime
             )

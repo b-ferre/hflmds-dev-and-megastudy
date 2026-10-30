@@ -119,6 +119,21 @@ shinyServer(function(input, output, session) {
       map_df$color <- map_scores_to_rg_pal(scores, threshold = 0)                                             ## nolint
       map_df$opacity <- rep(1, nrow(map_df))
       map_df$radius <- rep(3, nrow(map_df))
+    } else if (input$coloring_regime == "Inferential KGE - Benchmark KGE") {
+
+      inf_scores <- precomputed_score_df$inf_kge[
+        precomputed_score_df$model_identifier %in% considered_catchments
+      ]
+      bench_scores <- precomputed_score_df$benchmark_kge[
+        precomputed_score_df$model_identifier %in% considered_catchments
+      ]
+
+      scores <- inf_scores - bench_scores
+
+      map_df$color <- map_scores_to_rg_pal(scores, threshold = 0)                                             ## nolint
+      map_df$opacity <- rep(1, nrow(map_df))
+      map_df$radius <- rep(3, nrow(map_df))
+
     } else {
       stop(paste0("invalid color_regime (",
                   input$coloring_regime,
