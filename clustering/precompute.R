@@ -362,68 +362,72 @@ close(p)
 ###############################################################################
 ################# SEASONAL BENCHMARK SCORE CALCULATION ########################
 ###############################################################################
+cat("Calculating Seasonal Mean/Median Benchmarks...\n")
 z <- nrow(precomputed_score_df)
 seasonal_score_df <- data.frame(
   model_identifier = precomputed_score_df$model_identifier,
-  szn_mean_inf_kge = rep(NA, z),
-  szn_median_inf_kge = rep(NA, z)
+  benchmark_kge = rep(NA, z)
 )
 grids_to_calc_szn_score <- unique(sapply(precomputed_score_df$model_identifier, get_gc))      ## nolint
 p <- txtProgressBar(min = 0, max = length(grids_to_calc_szn_score), style = 3)
 for (q in seq_along(grids_to_calc_szn_score)) {
   grid_ <- grids_to_calc_szn_score[q]
 
-  ## get streamflow matrix (years x days i.e. q x (m + 1)
-  y_ <- readRDS(paste0("../data/processed/grid", grid_, "_rain.rds"))
+  ## get full streamflow vector
+  y <- as.numeric(t(readRDS(paste0("../data/processed/grid", grid_, "_streamflow.rds"))))           ## nolint
+
+  ## get the train and test frac as in predictive model
+  trainfrac <- 0.8
+  n_train <- floor(trainfrac * length(y) / (m + 1)) * (m + 1)
+  y_train <- y[1 : n_train]
+  y_test <- y[(n_train + 1) : length(y)]
+
+  ## form y_train into a (year x day) matrix
+  y_ <- matrix(y_train, ncol = (m + 1), byrow = TRUE)
 
   ## calculate seasonal mean and median
   y_median <- as.numeric(apply(y_, MARGIN = 2, FUN = function(col) median(col, na.rm = TRUE)))  ## nolint
   y_mean <- as.numeric(colMeans(y_, na.rm = TRUE))
 
   ## get the test set that was used by the inferential model
-  y_trunc <- as.numeric(t(y_))[(max_lag) : length(y_)]
+  y_trunc <- y_test[(max_lag) : length(y_test)]
 
   ## get versions of y_median/y_mean that have the same day indices as y_trunc
-  n_full_years <- length(y_trunc) %/% (m + 1)
-  stopifnot(
-    ((length(y_trunc) - (m + 1 - (max_lag - 1))) %% (m + 1)) == 0
-  )
-  y_median_full <- as.numeric(c(
-    y_median[(max_lag) : (m + 1)],
-    rep(y_median, n_full_years)
-  ))
-  y_mean_full <- as.numeric(c(
-    y_mean[(max_lag) : (m + 1)],
-    rep(y_mean, n_full_years)
-  ))
+  n_days <- m + 1
+  test_indices <- seq.int(n_train + max_lag, length(y))
+  test_days <- ((test_indices - 1L) %% n_days) + 1
+
+  y_median_full <- y_median[test_days]
+  y_mean_full   <- y_mean[test_days]
 
   ## trim out NA observations as in model
   keep_ <- is.finite(y_trunc)
+  stopifnot(
+    all(is.finite(y_mean_full[keep_])),
+    all(is.finite(y_median_full[keep_]))
+  )
   y_trunc <- y_trunc[keep_]
   y_mean_full <- y_mean_full[keep_]
   y_median_full <- y_median_full[keep_]
+
+  stopifnot(!any(is.na(y_trunc)))
+  stopifnot(!any(is.na(y_mean_full)))
+  stopifnot(!any(is.na(y_median_full)))
 
   ## calculate and save scores
   median_kge <- KGE(sim = y_median_full, obs = y_trunc)
   mean_kge <- KGE(sim = y_mean_full, obs = y_trunc)
 
   corresponding_ids <- c(paste0(grid_, "_centered"), paste0(grid_, "_uncentered"))  ## nolint
-  seasonal_score_df$szn_mean_inf_kge[
+  seasonal_score_df$benchmark_kge[
     seasonal_score_df$model_identifier %in% corresponding_ids
-  ] <- mean_kge
-  seasonal_score_df$szn_median_inf_kge[
-    seasonal_score_df$model_identifier %in% corresponding_ids
-  ] <- median_kge
+  ] <- max(median_kge, mean_kge)
 
   setTxtProgressBar(p, q)
 }
-seasonal_score_df$benchmark_kge <- pmax(
-  seasonal_score_df$szn_mean_inf_kge,
-  seasonal_score_df$szn_median_inf_kge
-)
+close(p)
 
 precomputed_score_df <- merge(precomputed_score_df, seasonal_score_df, by = "model_identifier") ## nolint
-
 ###############################################################################
 ############################# ASSET SAVING ####################################
 ###############################################################################

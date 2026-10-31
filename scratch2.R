@@ -59,3 +59,87 @@ length(unique_gcs_left)
 print(length(unique_gcs_left) / length(unique_gcs))
 frac_left <- num_left / nrow(scores)
 frac_left
+
+cent_models <- precomputed_score_df$model_identifier[sapply(
+  precomputed_score_df$model_identifier,
+  function(s) str_detect(s, "_centered")
+)]
+uncent_models <- precomputed_score_df$model_identifier[sapply(
+  precomputed_score_df$model_identifier,
+  function(s) str_detect(s, "_uncentered")
+)]
+
+all_grids <- unname(sapply(cent_models, get_gc))
+stopifnot(setequal(unname(sapply(uncent_models, get_gc)), all_grids))
+
+models_we_use1 <- unname(sapply(all_grids, function(gc) {
+  if (
+    precomputed_score_df$inf_kge[precomputed_score_df$model_identifier == paste0(gc, "_centered")] > precomputed_score_df$inf_kge[precomputed_score_df$model_identifier == paste0(gc, "_uncentered")]
+  ) {
+    paste0(gc, "_centered")
+  } else {
+    paste0(gc, "_uncentered")
+  }
+}))
+models_we_use2 <- unname(sapply(all_grids, function(gc) {
+    cent_score <- precomputed_score_df$pred_kge[precomputed_score_df$model_identifier == paste0(gc, "_centered")]
+    uncent_score <- precomputed_score_df$pred_kge[precomputed_score_df$model_identifier == paste0(gc, "_uncentered")]
+    if (is.na(cent_score)) cent_score <- -Inf
+    if (is.na(uncent_score)) uncent_score <- -Inf
+  if (
+    cent_score > uncent_score
+  ) {
+    paste0(gc, "_centered")
+  } else {
+    paste0(gc, "_uncentered")
+  }
+}))
+
+num_centered_in_scheme_1 <- sum(as.numeric(sapply(models_we_use1, function(q) str_split(q, "_")[[1]][2] == "centered")))    ## nolint
+num_centered_in_scheme_2 <- sum(as.numeric(sapply(models_we_use2, function(q) str_split(q, "_")[[1]][2] == "centered")))    ## nolint
+
+dq_on_score1 <- sapply(models_we_use1, function(id_i) {
+  pred_score <- precomputed_score_df$pred_kge[precomputed_score_df$model_identifier == id_i]
+  bench_score <- precomputed_score_df$benchmark_kge[precomputed_score_df$model_identifier == id_i]
+  if (!is.finite(bench_score) && is.finite(pred_score)) {
+    FALSE
+  } else if (!is.finite(pred_score)) {
+    TRUE
+  } else {
+    stopifnot(is.finite(pred_score) && is.finite(bench_score))
+    bench_score >= pred_score
+  }
+})
+dq_on_score2 <- sapply(models_we_use2, function(id_i) {
+  pred_score <- precomputed_score_df$pred_kge[precomputed_score_df$model_identifier == id_i]
+  bench_score <- precomputed_score_df$benchmark_kge[precomputed_score_df$model_identifier == id_i]
+  if (!is.finite(bench_score) && is.finite(pred_score)) {
+    FALSE
+  } else if (!is.finite(pred_score)) {
+    TRUE
+  } else {
+    stopifnot(is.finite(pred_score) && is.finite(bench_score))
+    bench_score >= pred_score
+  }
+})
+
+num_models_dq_on_score1 <- sum(dq_on_score1)
+num_models_dq_on_score2 <- sum(dq_on_score2)
+
+remaining_models <- models_we_use1[!dq_on_score1]
+
+
+
+
+
+
+
+
+## of the remaining models, how many have at least 1 negative parameter
+check1 <- as.numeric(apply(beta_mtx[remaining_models, ], 1, function(row) any(row < 0)))
+sum(check1)
+check2 <- as.numeric(apply(beta_mtx[remaining_models, ], 1, function(row) {
+  many_neg <- (sum(row < 0) / sum(row != 0)) > 0.05
+  big_neg <- ((abs(min(row)) / abs(max(row))) > 0.1) && (min(row) < 0)
+  many_neg || big_neg
+}))
