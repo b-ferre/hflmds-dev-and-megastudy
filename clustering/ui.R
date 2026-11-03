@@ -217,15 +217,17 @@ shinyUI(fluidPage(
                         "+(eCDF)"),
             selected = INITCLUSTERSETTINGS$comb_func
           ),
-          sliderInput(
+          selectInput(
             inputId = "min_kge_for_clust",
             label = "Minimum Inferential KGE to Use in Clustering",
-            min = -1, max = 1,
-            value = INITCLUSTERSETTINGS$min_kge_for_clust, step = 0.01
+            choices = c(
+              "DEFAULT", "-1", "0", "0.5", "0.6", "0.7", "0.8"
+            ),
+            selected = INITCLUSTERSETTINGS$min_kge_for_clust
           ),
           checkboxInput(
             inputId = "remove_negative_beta_ests",
-            label = "Remove Catchments With Many Negative B(s, t) Estimates",
+            label = "Remove Catchments With Any Negative B(s, t) Estimates",
             value = INITCLUSTERSETTINGS$remove_negative_beta_ests
           ),
           ## deseasonalization regime
@@ -234,7 +236,8 @@ shinyUI(fluidPage(
             selectInput(
               inputId = "deseasonalization_selection",
               label = "Select Degree of Use of Centered Estimates",
-              choices = c("Everywhere",
+              choices = c("DEFAULT",
+                          "Everywhere",
                           "Nowhere",
                           "Wherever Meaningfully Better Than Uncentered",
                           "Wherever Not Meaningfully Worse Than Uncentered"),

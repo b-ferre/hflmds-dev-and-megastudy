@@ -61,6 +61,8 @@ shinyServer(function(input, output, session) {
       map_df$opacity <- ifelse(map_df$cluster == 0, 0.2, 0.85)
       map_df$radius <- ifelse(map_df$cluster == 0, 2, 3)
 
+      map_df[map_df$model_identifier == "5017_centered", "radius"] <- 20
+
       hide_outliers_toggle <- input$hide_outliers_toggle
       if (isTRUE(hide_outliers_toggle)) {
         map_df <- map_df[map_df$cluster != 0L, , drop = FALSE]
@@ -139,11 +141,6 @@ shinyServer(function(input, output, session) {
                   input$coloring_regime,
                   ") passed to map generation in server.\n"))
     }
-
-
-
-
-
 
     output$clustering_map <- renderLeaflet({
       leaflet() |>
@@ -336,59 +333,6 @@ shinyServer(function(input, output, session) {
 
     cat("SERVER: heatmap construction finished...\n")
   }, ignoreInit = TRUE, priority = 8)
-
-  ## handle clicks on polygons in heatmap
-  # observeEvent(input$clustering_heatmap_shape_click, {
-  #   click <- input$clustering_heatmap_shape_click
-  #   state <- heatmap_click_data()
-  #   req(click$id, state)
-
-  #   model_ids <- state$model_ids[[as.character(click$id)]]
-  #   cluster_ids <- state$cluster_ids[[as.character(click$id)]]
-
-  #   # ignore clicks from an earlier rendering of the heatmap.
-  #   req(!is.null(model_ids))
-  #   req(!is.null(cluster_ids))
-
-  #   if (length(model_ids) == 0L) {
-  #     showNotification(
-  #       "No catchments are located in this polygon.",
-  #       type = "message"
-  #     )
-  #     return()
-  #   }
-
-  #   mean_beta <- calculate_mean_beta(
-  #     in_cluster_model_ids = model_ids,
-  #     dszn_bool = state$dszn_bool
-  #   )
-
-  #   mean_plot <- render_beta_and_derived_feats(
-  #     mean_beta,
-  #     calculate_plot_info(mean_beta)
-  #   )
-
-  #   output$heatmap_median_plot <- renderPlot({
-  #     grid::grid.newpage()
-  #     grid::grid.draw(mean_plot)
-  #   })
-
-  #   showModal(modalDialog(
-  #     title = paste0(
-  #       "Pointwise Mean — ",
-  #       length(model_ids),
-  #       " Catchment",
-  #       if (length(model_ids) == 1) "" else "s",
-  #       ", ", length(unique(cluster_ids)),
-  #       " Cluster",
-  #       if (length(unique(cluster_ids)) == 1) "" else "s"
-  #     ),
-  #     plotOutput("heatmap_median_plot", height = "500px"),
-  #     size = "l",
-  #     easyClose = TRUE,
-  #     footer = modalButton("Close")
-  #   ))
-  # }, ignoreInit = TRUE)
 
   summary_types <- c("Mean", "Median", "Medoid")
 

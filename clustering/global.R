@@ -79,9 +79,9 @@ INITCLUSTERSETTINGS <- c(                                                       
     linkage_method = "ward.D2",
     n_clusts_hclust = 8,
     n_clusts_kmedoids = 8,
-    deseasonalization_selection = "Wherever Meaningfully Better Than Uncentered",                                                     ## nolint
+    deseasonalization_selection = "DEFAULT",                                                     ## nolint
     dszn_thresh_selection = 0,
-    min_kge_for_clust = 0.4,
+    min_kge_for_clust = "DEFAULT", #0.4,
     pre_clust_outlier_trim = 0.10,
     pre_clust_outlier_neighbor_index = 2,
     remove_negative_beta_ests = TRUE,
@@ -358,12 +358,63 @@ get_rendered_beta_plot <- function(model_identifier) {
   obj
 }
 
-get_simple_rendered_beta_plot <- function(model_identifier) {
+get_simple_rendered_beta_plot_OLD <- function(model_identifier) {
   bvec <- precomputed_beta_matrix[as.character(model_identifier), ]
 
   obj <- plot_beta(bvec, title = model_identifier, simplified = TRUE)
   obj
 }
+
+#get order and location of all coefficient function nodes
+get_index_mat <- function(M, max_lag) {
+  K <- (M+1)*max_lag # total number of nodes
+  what<-expand.grid(0:(max_lag-1),0:M)
+  data.frame("Node" = 1:K, "Y_coord" = what$Var1, "X_coord" = what$Var2)
+}
+
+compute_delta<-function(bvec,M,max_lag){
+  deltavec<-rep(0,M+1)
+  
+  index_dat<-get_index_mat(M,max_lag)
+  
+  for(i in 0:M){
+    curobs<-bvec[index_dat$X_coord==i]
+    curobs<-curobs[length(curobs):1]
+    deltavec[i+1]<-max_lag-max(which(cumsum(curobs)==0),0)
+  }
+  deltavec
+}
+
+get_simple_rendered_beta_plot <-function(model_identifier){
+  M <- m
+  max_lag <- max_lag
+  bvec <- precomputed_beta_matrix[as.character(model_identifier), ]
+  index_dat<-get_index_mat(M,max_lag)
+  delta<-compute_delta(bvec,M,max_lag = max_lag)
+  
+  mat<-matrix(0,ncol = M+1,nrow = max_lag)
+  mat[cbind(index_dat$Y_coord+1,index_dat$X_coord+1)]<-bvec
+  mat<-matrix(mat[1:min(ceiling(max(delta)/10)*10,max_lag),],ncol = M+1)
+  range_p<-max(abs(mat[mat>0]),2e-15)
+  range_n<-max(abs(mat[mat<0]),2e-15)
+  tot_range<-range_p+ range_n
+  totalcols<-35
+  rangepercol<-tot_range/totalcols
+  numblues<-ceiling(range_p/rangepercol)
+  numreds<-totalcols- numblues +1
+  
+  coul <- colorRampPalette(brewer.pal(8, "Blues"))(max(numblues+2,ceiling(totalcols/2)))
+  coul2 <- colorRampPalette(brewer.pal(8, "Reds"))(max(numreds+2,ceiling(totalcols/2)))
+  colorvec<-c(coul2[(numreds-1+2):2],"#FFFFFF",coul[3:(numblues-1+3)])
+  
+  rownames(mat)<-0:(nrow(mat)-1)
+  mat<-setNames(reshape2::melt(t(mat)),c("x","y","z"))
+  
+  levelplot(z~x*y,mat,col.regions = colorvec,at=sort(c(seq(from=-1e-15,to=-range_n,length.out=numreds+1 ),seq(from=1e-15,to=range_p,length.out=numblues+1))),
+            ylab=list("Lag (Days)",cex=1.4),xlim = c(0.5,M+1+0.5),aspect = "xy",xlab=list("Day of the year" ,cex=1.4),colorkey=list(axis.text=list(cex=1.2)),
+            scales=list(x=list(cex=1.2),y=list(cex=1.2)))
+}
+
 
 ###############################################################################
 ###################### MAIN CLUSTERING ENTRY-POINT ############################
@@ -409,9 +460,25 @@ get_clustering_result <- function(
   ## only models with an inferential kge above this cutoff are included in
   ## clustering
   to_keep <- as.vector(sapply(models_to_consider, function(model_id_) {
-    precomputed_score_df$inf_kge[
-      precomputed_score_df$model_identifier == model_id_
-    ] >= min_kge_for_inclusion
+    if (min_kge_for_inclusion == "DEFAULT") {
+      pred_score <- precomputed_score_df$pred_kge[
+        precomputed_score_df$model_identifier == model_id_
+      ]
+      bench_score <- precomputed_score_df$benchmark_kge[
+        precomputed_score_df$model_identifier == model_id_
+      ]
+      if (!is.finite(pred_score)) {
+        return(FALSE)
+      }
+      if (is.finite(pred_score) && !is.finite(bench_score)) {
+        return(TRUE)
+      }
+      pred_score > bench_score
+    } else {
+      precomputed_score_df$inf_kge[
+        precomputed_score_df$model_identifier == model_id_
+      ] >= as.numeric(min_kge_for_inclusion)
+    }
   }))
   models_to_use <- models_to_consider[to_keep]
   if (debugmode) {
@@ -578,6 +645,36 @@ get_deseason_bool_vec_from_scheme <- function(scheme_key, threshold) {          
         precomputed_score_df$model_identifier == paste0(gc_i, "_centered")
       ]
       uncent_kge_i - cent_kge_i < threshold
+    }), as.character(unique_gridcodes))))
+  }
+  if (scheme_key == "DEFAULT") {
+    return(unlist(setNames(lapply(unique_gridcodes, function(gc_i) {
+      uncent_kge_i <- precomputed_score_df$pred_kge[
+        precomputed_score_df$model_identifier == paste0(gc_i, "_uncentered")
+      ]
+      cent_kge_i <- precomputed_score_df$pred_kge[
+        precomputed_score_df$model_identifier == paste0(gc_i, "_centered")
+      ]
+      if (!is.finite(uncent_kge_i) && is.finite(cent_kge_i)) {
+        return(TRUE)
+      }
+      if (is.finite(uncent_kge_i) && !is.finite(cent_kge_i)) {
+        return(FALSE)
+      }
+      if (!is.finite(uncent_kge_i) && !is.finite(cent_kge_i)) {
+        cat("GRIDCODE:", gc_i, "HAS NO FINITE PREDICTIVE KGEs...\n")
+        uncent_kge_i <- precomputed_score_df$inf_kge[
+          precomputed_score_df$model_identifier == paste0(gc_i, "_uncentered")
+        ]
+        cent_kge_i <- precomputed_score_df$inf_kge[
+          precomputed_score_df$model_identifier == paste0(gc_i, "_centered")
+        ]
+        return(cent_kge_i > uncent_kge_i)
+      }
+      if (is.finite(cent_kge_i) && is.finite(uncent_kge_i)) {
+        return(cent_kge_i > uncent_kge_i)
+      }
+      stop("shouldn't be here")
     }), as.character(unique_gridcodes))))
   }
   stop(paste0("Invalid Deseasonalization Scheme (", scheme_key, ") Passed to get_deseason_bool_vec_from_scheme()"))                 ## nolint

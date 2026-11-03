@@ -621,7 +621,7 @@ optimize_hyperparameters <- function(m, max_lag, ars,
   grid_r2s <- unlist(parallel_lapply(seq_len(nrow(grid_cells)), function(i) {
     r2 <- score_hp(grid_cells$w_h[i], grid_cells$w_v[i])
 
-    if (verbose && (((i - 1) %% 10) == 0)) {
+    if (verbose && TRUE) { #((((i - 1) %% 10) + 1) == 0)) {   ## FIXME: switch back to occasional updates to declutter console
       cat(
         "grid search iteration", i, "out of", nrow(grid_cells),
         "complete; R2 is", r2,
@@ -1176,6 +1176,14 @@ hflmds_inner <- function(x, y, ars, center = FALSE, verbose = TRUE, m, max_lag,
                                                 w_h_range = w_h_range, w_v_range = w_v_range,                       ## nolint
                                                 x = x, y = y, dvec = optimal_dvec, datasplit = hp_datasplit,        ## nolint
                                                 verbose = verbose, n_cores = n_cores)                               ## nolint
+
+  cat(
+    "\n\n performing final fit with params:\n",
+    "  > w_h =", hyperparams_final$w_h, "\n",
+    "  > w_v =", hyperparams_final$w_v, "\n",
+    "  > optimal_dvec saved as \"./optimal_dvec_check.rda\""
+  )
+  save(optimal_dvec, file = "./optimal_dvec_check.rda")
 
   ## perform final model fit
   b_final <- perform_fit(m = m, max_lag = max_lag, ars = ars,
