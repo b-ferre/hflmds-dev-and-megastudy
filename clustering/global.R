@@ -358,63 +358,12 @@ get_rendered_beta_plot <- function(model_identifier) {
   obj
 }
 
-get_simple_rendered_beta_plot_OLD <- function(model_identifier) {
+get_simple_rendered_beta_plot <- function(model_identifier) {
   bvec <- precomputed_beta_matrix[as.character(model_identifier), ]
 
   obj <- plot_beta(bvec, title = model_identifier, simplified = TRUE)
   obj
 }
-
-#get order and location of all coefficient function nodes
-get_index_mat <- function(M, max_lag) {
-  K <- (M+1)*max_lag # total number of nodes
-  what<-expand.grid(0:(max_lag-1),0:M)
-  data.frame("Node" = 1:K, "Y_coord" = what$Var1, "X_coord" = what$Var2)
-}
-
-compute_delta<-function(bvec,M,max_lag){
-  deltavec<-rep(0,M+1)
-  
-  index_dat<-get_index_mat(M,max_lag)
-  
-  for(i in 0:M){
-    curobs<-bvec[index_dat$X_coord==i]
-    curobs<-curobs[length(curobs):1]
-    deltavec[i+1]<-max_lag-max(which(cumsum(curobs)==0),0)
-  }
-  deltavec
-}
-
-get_simple_rendered_beta_plot <-function(model_identifier){
-  M <- m
-  max_lag <- max_lag
-  bvec <- precomputed_beta_matrix[as.character(model_identifier), ]
-  index_dat<-get_index_mat(M,max_lag)
-  delta<-compute_delta(bvec,M,max_lag = max_lag)
-  
-  mat<-matrix(0,ncol = M+1,nrow = max_lag)
-  mat[cbind(index_dat$Y_coord+1,index_dat$X_coord+1)]<-bvec
-  mat<-matrix(mat[1:min(ceiling(max(delta)/10)*10,max_lag),],ncol = M+1)
-  range_p<-max(abs(mat[mat>0]),2e-15)
-  range_n<-max(abs(mat[mat<0]),2e-15)
-  tot_range<-range_p+ range_n
-  totalcols<-35
-  rangepercol<-tot_range/totalcols
-  numblues<-ceiling(range_p/rangepercol)
-  numreds<-totalcols- numblues +1
-  
-  coul <- colorRampPalette(brewer.pal(8, "Blues"))(max(numblues+2,ceiling(totalcols/2)))
-  coul2 <- colorRampPalette(brewer.pal(8, "Reds"))(max(numreds+2,ceiling(totalcols/2)))
-  colorvec<-c(coul2[(numreds-1+2):2],"#FFFFFF",coul[3:(numblues-1+3)])
-  
-  rownames(mat)<-0:(nrow(mat)-1)
-  mat<-setNames(reshape2::melt(t(mat)),c("x","y","z"))
-  
-  levelplot(z~x*y,mat,col.regions = colorvec,at=sort(c(seq(from=-1e-15,to=-range_n,length.out=numreds+1 ),seq(from=1e-15,to=range_p,length.out=numblues+1))),
-            ylab=list("Lag (Days)",cex=1.4),xlim = c(0.5,M+1+0.5),aspect = "xy",xlab=list("Day of the year" ,cex=1.4),colorkey=list(axis.text=list(cex=1.2)),
-            scales=list(x=list(cex=1.2),y=list(cex=1.2)))
-}
-
 
 ###############################################################################
 ###################### MAIN CLUSTERING ENTRY-POINT ############################
@@ -1039,3 +988,17 @@ generate_heatmap_layer <- function(catchments_sf,
 
   final_heatmap
 }
+
+nmlz <- function(vec) {
+  (vec - min(vec)) / (max(vec) - min(vec))
+}
+
+calculate_kernel_realism <- function(model_identifier) {
+  beta <- precomputed_beta_matrix[model_identifier, ]
+  beta_m <- matrix(beta, nrow = (m + 1), byrow = TRUE)
+
+  var(nmlz(colSums(beta_m)))
+}
+
+## FIXME: put in precompute
+precomputed_kernel_metrics <- setNames(sapply(rownames(precomputed_beta_matrix), calculate_kernel_realism), rownames(precomputed_beta_matrix))

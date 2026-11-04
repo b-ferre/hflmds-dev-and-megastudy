@@ -1,3 +1,6 @@
+library(RColorBrewer)
+library(lattice)
+
 calculate_delta <- function(bvec, m = 364, max_lag = 150) {
   d <- as.numeric(sapply(seq_len(m + 1), function(t) {
     b_t <- bvec[(((t - 1) * (max_lag)) + 1):(t * (max_lag))]

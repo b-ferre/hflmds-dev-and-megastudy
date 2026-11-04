@@ -136,6 +136,16 @@ shinyServer(function(input, output, session) {
       map_df$opacity <- rep(1, nrow(map_df))
       map_df$radius <- rep(3, nrow(map_df))
 
+    } else if (input$coloring_regime == "Kernel Realism (Ranks)") {
+      metrics_to_use <- precomputed_kernel_metrics[
+        names(precomputed_kernel_metrics) %in% considered_catchments
+      ]
+      scores <- rank(metrics_to_use, ties.method = "average") / length(metrics_to_use)          ## nolint
+
+      map_df$color <- map_scores_to_rg_pal(scores, threshold = 0.5)                                           ## nolint
+      map_df$opacity <- rep(1, nrow(map_df))
+      map_df$radius <- rep(3, nrow(map_df))
+
     } else {
       stop(paste0("invalid color_regime (",
                   input$coloring_regime,
