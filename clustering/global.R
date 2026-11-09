@@ -988,17 +988,3 @@ generate_heatmap_layer <- function(catchments_sf,
 
   final_heatmap
 }
-
-nmlz <- function(vec) {
-  (vec - min(vec)) / (max(vec) - min(vec))
-}
-
-calculate_kernel_realism <- function(model_identifier) {
-  beta <- precomputed_beta_matrix[model_identifier, ]
-  beta_m <- matrix(beta, nrow = (m + 1), byrow = TRUE)
-
-  var(nmlz(colSums(beta_m)))
-}
-
-## FIXME: put in precompute
-precomputed_kernel_metrics <- setNames(sapply(rownames(precomputed_beta_matrix), calculate_kernel_realism), rownames(precomputed_beta_matrix))

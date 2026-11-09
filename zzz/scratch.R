@@ -39,17 +39,20 @@ nq2 <- 100
 max_q <- 1
 dvec_datasplit <- c(0.75, 0.25)
 
-sup_file_dir <- paste0("./grid", catchment_to_model, "_results_small_search/")   ## FIXME: remove "_small_search"     ## nolint
+sup_file_dir <- paste0("./grid", catchment_to_model, "_results/")   ## FIXME: remove "_small_search"     ## nolint
 
 for (centering in c(TRUE, FALSE)) {
   for (opt_metric in c("r2")) {                       ## consider trying kge too
     for (gp_norm_mode in c("1", "2", "3")) {
+      if (!dir.exists(paste0(sup_file_dir, "ctr_", centering, "_opt_", opt_metric, "_gmode_", gp_norm_mode))) {
+        next
+      }
       ## load final hyperparameters and dvec
       dvc <- readRDS(paste0(
         sup_file_dir, "ctr_", centering, "_opt_", opt_metric, "_gmode_", gp_norm_mode, "/optimal_dvec.rds"            ## nolint
       ))
       hp_grid <- readRDS(paste0(
-        sup_file_dir, "ctr_", centering, "_opt_", opt_metric, "_gmode_", gp_norm_mode, "/hp_search_results.rds"       ## nolint
+        sup_file_dir, "ctr_", centering, "_opt_", opt_metric, "_gmode_", gp_norm_mode, "/hp_search_results_round2.rds"       ## nolint
       ))
       best_idx <- which.max(hp_grid$score)
       best_w_h <- hp_grid$w_h[best_idx]
@@ -90,4 +93,3 @@ for (centering in c(TRUE, FALSE)) {
   load(paste0("../results/pred_model_", if (centering) "centered" else "uncentered", "_grid", catchment_to_model, ".rda"))
   cat("\n\nFor reference, model from CC run achieved test KGE of", model$scores$kge, "\n\n")
 }
-
