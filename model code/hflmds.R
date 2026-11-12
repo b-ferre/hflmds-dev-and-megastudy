@@ -762,7 +762,7 @@ optimize_hyperparameters <- function(m, max_lag, ars,
 
       if (verbose) {
         cat(
-          "grid search iteration", gp_i, "out of", n_gp,
+          "gp search iteration", gp_i, "out of", n_gp,
           "complete; R2 is", r2, "(SE:", se, ")\n",
           "w_h is ", candidate$w_h, ", and w_v is ", candidate$w_v,
           "\n"
