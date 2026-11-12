@@ -140,9 +140,12 @@ get_design_matrix <- function(x, y, first_day_index,
 #' @param max_lag is the number of effective lags s to consider (starting at 0)
 #' @param ars is the degree of the ar process used to model the residuals;
 #' ars = 0 indicates that no autocorrelated residual correction is being used
+#' @param d_v_diff is a number (either 1 or 2) representing which
+#' differences should be penalized along the lag axis. 1, 2 correspond to the
+#' first and second differences, respectively
 #'
 #' @returns a list of d_h and d_v - the day-wise and lag-wise regularization matrices     ## nolint
-get_regularization_mats <- function(m, max_lag, ars = 0) {
+get_regularization_mats <- function(m, max_lag, ars = 0, d_v_diff = 1) {
 
   ## build d_h
   nrow_h <- (m + 1) * (max_lag + ars)
@@ -157,22 +160,39 @@ get_regularization_mats <- function(m, max_lag, ars = 0) {
   x_h <- as.vector(sapply(seq_len(nrow_h), function(q) c(-1, 1)))
   d_h <- sparseMatrix(i = i_h, j = j_h, x = x_h, dims = c(nrow_h, ncol_h))
 
-  ## build d_v
-  num_interior_lags <- (max_lag + ars - 2)
-  nrow_v <- num_interior_lags * (m + 1)
-  ncol_v <- ((m + 1) * (max_lag + ars)) + ars
-  i_v <- as.vector(sapply(seq_len(nrow_v), function(q) rep(q, 3)))
-  j_v <- as.vector(sapply(seq_len(nrow_v), function(q) {
-    qstar <- ((q - 1) %% num_interior_lags) + 1
-    block_idx <- as.integer(ceiling(q / num_interior_lags))
-    start_idx <- ((block_idx - 1) * (max_lag + ars)) + qstar
-    c(start_idx,
-      start_idx + 1,
-      start_idx + 2
-    )
-  }))
-  x_v <- as.vector(sapply(seq_len(nrow_v), function(q) c(1, -2, 1)))
-  d_v <- sparseMatrix(i = i_v, j = j_v, x = x_v, dims = c(nrow_v, ncol_v))
+  ## build d_v (2nd diff)
+  if (d_v_diff == 2) {
+    num_interior_lags <- (max_lag + ars - 2)
+    nrow_v <- num_interior_lags * (m + 1)
+    ncol_v <- ((m + 1) * (max_lag + ars)) + ars ## 0-pad for AR terms
+    i_v <- as.vector(sapply(seq_len(nrow_v), function(q) rep(q, 3)))
+    j_v <- as.vector(sapply(seq_len(nrow_v), function(q) {
+      qstar <- ((q - 1) %% num_interior_lags) + 1
+      block_idx <- as.integer(ceiling(q / num_interior_lags))
+      start_idx <- ((block_idx - 1) * (max_lag + ars)) + qstar
+      c(start_idx,
+        start_idx + 1,
+        start_idx + 2
+      )
+    }))
+    x_v <- as.vector(sapply(seq_len(nrow_v), function(q) c(1, -2, 1)))
+    d_v <- sparseMatrix(i = i_v, j = j_v, x = x_v, dims = c(nrow_v, ncol_v))
+  } else {
+    stopifnot(d_v_diff == 1)
+    num_interior_lags <- (max_lag + ars - 1)
+    nrow_v <- (num_interior_lags + 1) * (m + 1)
+    ncol_v <- ((m + 1) * (max_lag + ars)) + ars ## 0-pad for AR terms
+    i_v <- as.vector(unlist(sapply(seq_len(nrow_v), function(q) {
+      if ((q %% (num_interior_lags + 1)) == 0) rep(q, 1) else rep(q, 2)
+    })))
+    j_v <- as.vector(unlist(sapply(seq_len(nrow_v), function(q) {
+      if ((q %% (num_interior_lags + 1)) == 0) c(q) else c(q, q + 1)
+    })))
+    x_v <- as.vector(unlist(sapply(seq_len(nrow_v), function(q) {
+      if ((q %% (num_interior_lags + 1)) == 0) c(1) else c(-1, 1)
+    })))
+    d_v <- sparseMatrix(i = i_v, j = j_v, x = x_v, dims = c(nrow_v, ncol_v))
+  }
 
   ## return list of regularization matrices
   list(d_h = d_h, d_v = d_v)
@@ -518,86 +538,63 @@ get_beta_from_b_safely <- function(bvec, m, max_lag, ars, dvec = NULL) {
 #' @param verbose is a boolean dictating whether a progress bar for the
 #' two rounds of optimization should be displayed
 #'
+#' TODO: finish documenting
+#' TODO: finish making completely observable post-mortem
+#'
 #' @returns the optimal values of log(w_h) and log(w_v)
 optimize_hyperparameters <- function(m, max_lag, ars,
                                      n_grid, n_gp, w_h_range, w_v_range,
                                      x, y, dvec = NULL,
                                      datasplit = c(0.75, 0.25),
-                                     verbose = TRUE, n_cores = 1L) {
+                                     verbose = TRUE, n_cores = 1L,
+                                     k_folds_for_cv = 1,
+                                     d_v_diff = 1,
+                                     large_hp_pseudoprior = FALSE) {
 
+  ## assign a default dvec if none was provided
   if (is.null(dvec)) {
     dvec <- rep(max_lag, m + 1)
   }
 
-  ## helper for scaling a data.frame of w_h and w_v values into [0, 1]
-  scale_hp <- function(z) {
-    cbind(
-      (z$w_h - w_h_range[1]) / diff(w_h_range),
-      (z$w_v - w_v_range[1]) / diff(w_v_range)
-    )
-  }
-
-  ## helper for converting w_h/w_v pairs into string form to find dupes
-  hp_key <- function(z) {
-    paste(round(z$w_h, 12), round(z$w_v, 12))
-  }
-
-  ## helper function for testing a candidate pair of w_h/w_v values
-  score_hp <- function(w_h, w_v) {
-    tryCatch({
-      lhs <- xtx + exp(w_h) * h_penalty + exp(w_v) * v_penalty
-      fit <- numeric(ncol(design_train))
-      fit[keep_coef] <- Matrix::solve(lhs, xty)
-
-      if (ars > 0) {
-        fit <- get_beta_from_b_safely(fit,
-                                      m = m,
-                                      max_lag = max_lag,
-                                      ars = ars,
-                                      dvec = dvec)
-      }
-
-      pred_y <- as.numeric(design_val %*% fit)
-      r2 <- 1 - sum((pred_y - y_val_trunc)^2) / val_tss
-
-      if (is.finite(r2)) r2 else NA_real_
-    }, error = function(e) {
-      print(e)
-      NA_real_
-    })
-  }
-
   print("running optimize_hyperparameters...")
 
-  ## get training data
-  n_train <- as.integer(floor(datasplit[1] * length(x)))
-  x_train <- x[1:n_train]
-  y_train <- y[1:n_train]
-  first_day_index_train <- 1
-
-  ## get validation data
-  x_val <- x[(n_train + 1):length(x)]
-  y_val <- y[(n_train + 1):length(y)]
-  first_day_index_val <- ((n_train) %% (m + 1)) + 1
-
-  ## Build the expensive data-dependent matrices once. Only the two scalar
-  ## penalty weights change between hyperparameter candidates.
-  regmats <- get_regularization_mats(m, max_lag, ars)
-  train_mats <- get_design_matrix(
-    x_train, y_train, first_day_index_train, m, max_lag, ars
+  ## build entire design matrix using all data which will later
+  ## be split into train/val splits
+  design_mat_full <- get_design_matrix(
+    x, y, first_day_index = 1, m = m,
+    max_lag = max_lag, ars = ars, remove_na_rows = TRUE
   )
-  design_train <- train_mats$design_matrix
-  y_train_trunc <- train_mats$y_trunc
 
-  ## Validation always scores the deconvolved beta with ars = 0.
-  val_mats <- get_design_matrix(
-    x_val, y_val, first_day_index_val, m, max_lag, ars = 0
+  ## precompute all training/validation data pairs
+  default_val_starts <- floor(seq(from = 1 - datasplit[2], to = 0, by = -datasplit[2]) * nrow(design_mat_full)) ## nolint
+  val_length_d <- floor(datasplit[2] * nrow(design_mat_full))
+  train_length_d <- nrow(design_mat_full) - val_length_d
+  train_val_splits <- lapply(
+    seq_len(k_folds_for_cv),
+    function(fold_index) {
+      if (fold_index <= length(default_val_starts)) {
+        val_start <- default_val_starts[fold_index]
+      } else {
+        val_start <- floor(runif(1, min = 0, max = 1) * nrow(design_mat_full))
+      }
+      val_end <- val_start + val_length_d - 1
+      val_indexes <- ((seq(from = val_start, to = val_end, by = 1) - 1) %% nrow(design_mat_full)) + 1         ## nolint
+
+      train_start <- val_end + 1
+      train_end <- train_start + train_length_d - 1
+      train_indexes <- ((seq(from = train_start, to = train_end, by = 1) - 1) %% nrow(design_mat_full)) + 1   ## nolint
+
+      list(
+        train_mat = design_mat_full$design_matrix[train_indexes, , drop = FALSE],                             ## nolint
+        train_y = design_mat_full$y_trunc[train_indexes],
+        val_mat = design_mat_full$design_matrix[val_indexes, , drop = FALSE],
+        val_y_trunc = design_mat_full$y_trunc[val_indexes]
+      )
+    }
   )
-  design_val <- val_mats$design_matrix
-  y_val_trunc <- val_mats$y_trunc
-  val_tss <- sum((y_val_trunc - mean(y_val_trunc))^2)
 
-  keep_coef <- seq_len(ncol(design_train))
+  ## precalculate our dvec column mask
+  keep_coef <- seq_len(ncol(design_mat_full$design_matrix))
   if (!is.null(dvec)) {
     keep_coef <- c(
       unlist(Map(
@@ -607,52 +604,121 @@ optimize_hyperparameters <- function(m, max_lag, ars,
       (m + 1L) * (max_lag + ars) + seq_len(ars)
     )
   }
-  design_train_kept <- design_train[, keep_coef, drop = FALSE]
-  xtx <- crossprod(design_train_kept)
-  xty <- crossprod(design_train_kept, y_train_trunc)
+
+  ## build our regularization matrices & precompute penalty terms
+  regmats <- get_regularization_mats(m, max_lag, ars, d_v_diff = d_v_diff)
   h_penalty <- crossprod(regmats$d_h[, keep_coef, drop = FALSE])
   v_penalty <- crossprod(regmats$d_v[, keep_coef, drop = FALSE])
 
-  ## grid search
+  ## for each fold, mask training matrix and precompute fold-specific
+  ## terms in each linear regression to reduce solving overhead
+  train_val_splits <- lapply(train_val_splits, function(fold) {
+    train_mat_kept <- fold$train_mat[, keep_coef, drop = FALSE]
+
+    fold$xtx <- crossprod(train_mat_kept)
+    fold$xty <- crossprod(train_mat_kept, fold$train_y)
+    fold$val_tss <- sum((fold$val_y_trunc - mean(fold$val_y_trunc))^2)
+
+    fold
+  })
+
+  ## helper function for testing a candidate pair of w_h/w_v values across
+  ## all available train/val splits. report mean validation error and
+  ## standard error
+  score_hp <- function(w_h, w_v) {
+    tryCatch({
+      ## evaluate this hyperparameter pair across all folds
+      fold_r2s <- vapply(train_val_splits, function(fold) {
+
+        ## Combine pre-computed matrices for this specific fold
+        lhs <- fold$xtx + exp(w_h) * h_penalty + exp(w_v) * v_penalty
+
+        fit <- numeric(ncol(design_mat_full$design_matrix))
+        fit[keep_coef] <- Matrix::solve(lhs, fold$xty)
+
+        if (ars > 0) {
+          fit <- get_beta_from_b_safely(fit,
+                                        m = m,
+                                        max_lag = max_lag,
+                                        ars = ars,
+                                        dvec = dvec)
+        }
+
+        pred_y <- as.numeric(fold$val_mat %*% fit)
+        r2 <- 1 - sum((pred_y - fold$val_y_trunc)^2) / fold$val_tss
+
+        r2
+      }, FUN.VALUE = numeric(1))
+
+      ## filter all fits to only include the ones that didn't fail
+      valid_r2s <- fold_r2s[is.finite(fold_r2s)]
+      k_valid <- length(valid_r2s)
+
+      ## calculate the mean validation r2 across all successful fits
+      mean_r2 <- if (k_valid > 0) mean(valid_r2s) else NA_real_
+
+      ## calculate the standard error of the r2 across all successful fits
+      se_r2 <- if (k_valid > 1) sd(valid_r2s) / sqrt(k_valid) else NA_real_
+
+      ## return values
+      list(
+        mean_val_r2 = mean_r2,
+        se_val_r2 = se_r2
+      )
+    }, error = function(e) {
+      warning(paste0("score_hp failed with w_h/w_v = ", w_h, "/", w_v, "\n"))
+      NA_real_
+    })
+  }
+
+  ############################## GRID SEARCH ##################################
+
+  ## define a grid to search over
   grid_w_h <- seq(from = w_h_range[1], to = w_h_range[2], length.out = n_grid)              ## nolint
   grid_w_v <- seq(from = w_v_range[1], to = w_v_range[2], length.out = n_grid)              ## nolint
   grid_cells <- expand.grid(grid_w_h, grid_w_v)
   names(grid_cells) <- c("w_h", "w_v")
-  grid_r2s <- unlist(parallel_lapply(seq_len(nrow(grid_cells)), function(i) {
-    r2 <- score_hp(grid_cells$w_h[i], grid_cells$w_v[i])
 
-    if (verbose && TRUE) { #((((i - 1) %% 10) + 1) == 0)) {   ## FIXME: switch back to occasional updates to declutter console
-      cat(
-        "grid search iteration", i, "out of", nrow(grid_cells),
-        "complete; R2 is", r2,
-        ", w_h is ", grid_cells$w_h[i], ", and w_v is ", grid_cells$w_v[i],
-        "\n"
-      )
+  ## run score_hp over the grid
+  grid_scores_list <- parallel_lapply(seq_len(nrow(grid_cells)), function(i) {
+    res <- score_hp(grid_cells$w_h[i], grid_cells$w_v[i])
+    if (verbose) {
+      cat("grid search iteration", i, "out of", nrow(grid_cells),
+          "complete; R2 is", res["r2"], "(SE:", res["se"], ")\n",
+          "w_h is ", grid_cells$w_h[i], ", and w_v is ", grid_cells$w_v[i],
+          "\n")
     }
+    res
+  }, n_cores)
 
-    r2
-  }, n_cores), use.names = FALSE)
+  ## extract means and SEs from grid fits
+  grid_r2s <- vapply(grid_scores_list, function(x) x["r2"], numeric(1))
+  grid_ses <- vapply(grid_scores_list, function(x) x["se"], numeric(1))
 
   if (!any(is.finite(grid_r2s))) {
     stop("All hyperparameter evaluations failed.")
   }
 
-  ## gaussian process
-  ## define w_h x w_v surface to use for GP estimates
+  ########################### GAUSSIAN PROCESS ################################
+
+  ## GP helper for scaling a data.frame of w_h and w_v values into [0, 1]
+  scale_hp <- function(z) {
+    cbind(
+      (z$w_h - w_h_range[1]) / diff(w_h_range),
+      (z$w_v - w_v_range[1]) / diff(w_v_range)
+    )
+  }
+
+  ## GP helper for converting w_h/w_v pairs into string form to find dupes
+  hp_key <- function(z) {
+    paste(round(z$w_h, 12), round(z$w_v, 12))
+  }
+
+  ## define dense w_h x w_v surface to use for GP estimates
   dense_grid <- expand.grid(
     w_h = seq(w_h_range[1], w_h_range[2], length.out = 100),
     w_v = seq(w_v_range[1], w_v_range[2], length.out = 100)
   )
-
-  ## "cache" best values seen so far in case of early GP stoppage due to error
-  best_idx_so_far <- which.max(grid_r2s)
-  best_w_h_so_far <- grid_cells$w_h[best_idx_so_far]    ## nolint
-  best_w_v_so_far <- grid_cells$w_v[best_idx_so_far]    ## nolint
-
-  # if (verbose) p2 <- txtProgressBar(0, n_gp, style = 3) ## nolint
-
-  ## capture function environment to permit early return within error handler
-  outer_env <- environment()
 
   for (gp_i in seq_len(n_gp)) {
     tryCatch(expr = {
@@ -685,22 +751,20 @@ optimize_hyperparameters <- function(m, max_lag, ars,
       if (!any(is.finite(ei))) break
 
       candidate <- dense_grid[which.max(ei), , drop = FALSE]
-      r2 <- score_hp(candidate$w_h, candidate$w_v)
+      candidate_res <- score_hp(candidate$w_h, candidate$w_v)
+
+      r2 <- candidate_res$r2
+      se <- candidate_res$se
 
       grid_cells <- rbind(grid_cells, candidate)
       grid_r2s <- c(grid_r2s, r2)
+      grid_ses <- c(grid_ses, se)
 
-      ## update "cache" of best values in case of early stoppage from error
-      best_idx_so_far <- which.max(grid_r2s)
-      best_w_h_so_far <- grid_cells$w_h[best_idx_so_far]
-      best_w_v_so_far <- grid_cells$w_v[best_idx_so_far]
-
-      # if (verbose) setTxtProgressBar(p2, gp_i) ## nolint
-      if (verbose && (((gp_i - 1) %% 10) == 0)) {
+      if (verbose) {
         cat(
-          "gaussian process iteration", gp_i, "out of", n_gp,
-          "complete; R2 is", r2,
-          ", w_h is ", candidate$w_h, ", and w_v is ", candidate$w_v,
+          "grid search iteration", gp_i, "out of", n_gp,
+          "complete; R2 is", r2, "(SE:", se, ")\n",
+          "w_h is ", candidate$w_h, ", and w_v is ", candidate$w_v,
           "\n"
         )
       }
@@ -708,19 +772,75 @@ optimize_hyperparameters <- function(m, max_lag, ars,
       cat("Encountered an error (below) during GP iteration",
           gp_i, "of", n_gp, "\n")
       print(e)
-      cat("\nReturning best hp values found so far...\n")
-      eval(quote(return(list(w_h = best_w_h_so_far, w_v = best_w_v_so_far))),
-           envir = outer_env)
     })
   }
 
-  # if (verbose) close(p2) ## nolint
+  ########################### OPTIMUM DETECTION ###############################
 
   ## of all combinations tested, find the best pair and return
-  best_idx <- which.max(grid_r2s)
-  best_w_h <- grid_cells$w_h[best_idx]
-  best_w_v <- grid_cells$w_v[best_idx]
-  list(w_h = best_w_h, w_v = best_w_v)
+  if (large_hp_pseudoprior) {
+    ## find the absolute best validation accuracy across all tested w_h/w_v
+    ## pairs, as well as its standard error, if available
+    max_idx <- which.max(grid_r2s)
+    max_r2 <- grid_r2s[max_idx]
+    max_se <- grid_ses[max_idx]
+
+    ## define our error tolerance. preferably use standard error, but if
+    ## k-folds = 1 or something went awry during the fits for the pair with the
+    ## best validation accuracy, default to a tolerance of up to a 0.01 drop in
+    ## validation R2
+    tolerance <- if (is.na(max_se)) 0.01 else max_se
+
+    ## identify all candidate w_h/w_v pairs that scored within tolerance of the
+    ## best accuracy
+    striking_distance_idx <- which(grid_r2s >= (max_r2 - tolerance))
+
+    w_h_pool <- grid_cells$w_h[striking_distance_idx]
+    w_v_pool <- grid_cells$w_v[striking_distance_idx]
+
+    ## compute relative regularization weights (w.r.t. the range of values of
+    ## w_h and w_v within the in-tolerance candidate pairs)
+    range_h <- diff(range(w_h_pool))
+    range_v <- diff(range(w_v_pool))
+    scaled_w_h <- if (range_h > 0) (w_h_pool - min(w_h_pool)) / range_h else rep(0, length(w_h_pool)) ## nolint
+    scaled_w_v <- if (range_v > 0) (w_v_pool - min(w_v_pool)) / range_v else rep(0, length(w_v_pool)) ## nolint
+
+    ## calculate a weighted euclidean distance from the origin of the
+    ## candidate pool to serve as a measure of combined hyperparameter
+    ## strength. we prioritize w_h because it is more in line with the
+    ## physics of catchment hydrology to expect a large degree of day-
+    ## to-day smoothing than lag-to-lag smoothing
+    weight_h <- 0.75
+    weight_v <- 0.25
+    hp_mag <- sqrt((weight_h * scaled_w_h)^2 + (weight_v * scaled_w_v)^2)
+
+    ## select the hyperparameter pair with the largest combined hyperparameter
+    ## strength that is within "striking distance" of the best performance
+    best_relative_idx <- which.max(hp_mag)
+    best_idx <- striking_distance_idx[best_relative_idx]
+
+    best_w_h <- grid_cells$w_h[best_idx]
+    best_w_v <- grid_cells$w_v[best_idx]
+
+    if (verbose) {
+      cat("1-SE Rule applied: Max R2 was", round(max_r2, 4),
+          "| Selected R2 is", round(grid_r2s[best_idx], 4),
+          "with penalties (w_h:", round(best_w_h, 2), ",
+          w_v:", round(best_w_v, 2), ")\n")
+    }
+
+  } else {
+    best_idx <- which.max(grid_r2s)
+    best_w_h <- grid_cells$w_h[best_idx]
+    best_w_v <- grid_cells$w_v[best_idx]
+  }
+
+  ################# RETURN ALL VALUES (FOR FULL VISIBILITY) ###################
+
+  list(
+    hyperparameters = list(w_h = best_w_h, w_v = best_w_v),
+    search_dataframe = rbind(grid_cells, grid_r2s, grid_ses)
+  )
 }
 
 ### perform quantile thresholding #
@@ -730,15 +850,17 @@ optimize_hyperparameters <- function(m, max_lag, ars,
 ###################################
 #'
 #' TODO: document fully
+#' TODO: finish making entirely observable post-mortem
 #'
-optimize_dvec <- function(beta_est,
-                          m, max_lag, ars = 0,
-                          x, y,
-                          nq1 = 100, nq2 = 100,
-                          max_q = 0.5,
-                          datasplit = c(0.75, 0.25),
-                          w_h, w_v,
-                          verbose = TRUE, n_cores = 1L) {
+optimize_dvec_elbow <- function(beta_est,
+                                m, max_lag, ars = 0,
+                                x, y,
+                                nq1 = 100, nq2 = 100,
+                                max_q = 0.5,
+                                datasplit = c(0.75, 0.25),
+                                w_h, w_v,
+                                grp_norm_calc_method = "new",
+                                verbose = TRUE, n_cores = 1L) {
 
   n_cores <- max(1L, as.integer(n_cores))
 
@@ -750,13 +872,22 @@ optimize_dvec <- function(beta_est,
   }
 
   ## calculate day-relative group values of the provided beta_est
-  group_values <- unlist(lapply(seq_len(m + 1), function(day_index) {
-    beta_t <- beta_est[(((day_index - 1) * max_lag) + 1):(day_index * max_lag)]
-    daytotal <- sum(beta_t)
-    cumsums <- rev(cumsum(rev(beta_t)))
-    cumsums / daytotal
-  }))
-
+  if (grp_norm_calc_method == "new") {
+    stop("NEW GRP NORM CALCULATION METHOD NOT YET FINALIZED")
+    ##FIXME: update this to work the way I want
+    # group_values <- unlist(lapply(seq_len(m + 1), function(day_index) {
+    #   beta_t <- beta_est[(((day_index - 1) * max_lag) + 1):(day_index * max_lag)]
+    #   daytotal <- sum(beta_t)
+    #   cumsums <- rev(cumsum(rev(beta_t)))
+    #   cumsums / daytotal
+    # }))
+  } else {
+    if (grp_norm_calc_method != "old") warning("Invalid grp_norm_calc_method. Defaulting to old.")  ## nolint
+    group_values <- unlist(lapply(seq_len(m + 1), function(day_index) {
+      beta_t <- beta_est[(((day_index - 1) * max_lag) + 1):(day_index * max_lag)]                   ## nolint
+      rev(cumsum(rev(beta_t ** 2)))
+    }))
+  }
   ## helper to calculate the dvec associated with zeroing out lags where
   ## the tail makes up a fraction of less than q*100 % of total in-day
   ## coefficient value
@@ -779,6 +910,7 @@ optimize_dvec <- function(beta_est,
 
   ## helper to find the elbow point in a (generally) increasing
   ## plot of validation performance as function of # of params
+  ## if loess_span is set to NA, then no smoothing is used
   get_elbow_index <- function(x, y, min_segment_length = 3, loess_span = 0.4) {
     ## 1. Bind to original indices to prevent mapping errors after sorting
     df <- data.frame(orig_idx = seq_along(x), x = x, y = y)
@@ -800,7 +932,11 @@ optimize_dvec <- function(beta_est,
     ## 4. Extract the underlying signal from the validation noise
     ## A span of 0.4 provides strong protection against local spikes while
     ## preserving the macroscopic concavity of the curve
-    df$y_smooth <- predict(loess(y ~ x, data = df, span = loess_span))
+    if (is.na(loess_span)) {
+      df$y_smooth <- y
+    } else {
+      df$y_smooth <- predict(loess(y ~ x, data = df, span = loess_span))
+    }
 
     ## 5. Segmented Regression (Structural Break Detection)
     n <- nrow(df)
@@ -825,20 +961,37 @@ optimize_dvec <- function(beta_est,
     ## 6. Find the knot that minimized the combined squared error of both lines
     best_sorted_idx <- which.min(total_rss)
 
-    ## 7. Return the ORIGINAL index to ensure qs_1[idx] maps correctly
-    df$orig_idx[best_sorted_idx]
+    ## return all values needed to reconstruct this optimization post-mortem
+    list(
+      best_value = y[df$orig_idx[best_sorted_idx]],
+      elbow_df = df,
+      loess_span = loess_span,
+      min_segment_length = min_segment_length
+    )
   }
 
-  ## get training data
-  n_train <- round(length(x) * datasplit[1])
-  x_train <- x[1 : n_train]
-  y_train <- y[1 : n_train]
-  first_day_index_train <- 1
+  ## get training and validation split (or just duplicate
+  ## training data if using the old fitting routine)
+  if (is.na(datasplit)) {
+    x_train <- x
+    y_train <- y
+    x_val <- x
+    y_val <- y
+    first_day_index_train <- 1
+    first_day_index_val <- 1
+  } else {
+    stopifnot(typeof(datasplit) == "numeric" && length(datasplit) == 2 && sum(datasplit) == 1)  ## nolint
+    ## get training data
+    n_train <- round(length(x) * datasplit[1])
+    x_train <- x[1 : n_train]
+    y_train <- y[1 : n_train]
+    first_day_index_train <- 1
 
-  ## get validation data
-  x_val <- x[(n_train + 1):length(x)]
-  y_val <- y[(n_train + 1):length(y)]
-  first_day_index_val <- ((n_train) %% (m + 1)) + 1
+    ## get validation data
+    x_val <- x[(n_train + 1):length(x)]
+    y_val <- y[(n_train + 1):length(y)]
+    first_day_index_val <- ((n_train) %% (m + 1)) + 1
+  }
 
   ## test different values of neg_thresh (round 1)
   qs_1 <- seq(0.0, max_q, length.out = nq1)
@@ -878,7 +1031,8 @@ optimize_dvec <- function(beta_est,
 
   ## detect elbow point in graph of validation accuracy as a function
   ## of number of retained parameters
-  best_q1 <- qs_1[get_elbow_index(x = nonzero_coeffs_1, y = r2s_1)]
+  elbow_check_1 <- get_elbow_index(x = nonzero_coeffs_1, y = r2s_1)
+  best_q1 <- elbow_check_1$best_value
   if (verbose) {
     cat("first round of dvec optimization complete. q selected:",
         best_q1, "\n")
@@ -886,7 +1040,7 @@ optimize_dvec <- function(beta_est,
 
   ## try to refine q2 estimate (but be careful of potentially
   ## overly tight search neighborhood)
-  best_q_ovr <- tryCatch(expr = {
+  elbow_check_2 <- tryCatch(expr = {
     ## test different values of neg_thresh in neighborhood of initial estimate
     qs_2 <- seq(from = max(best_q1 * 0.75, 0),
                 to = min(best_q1 * 1.25, max_q),
@@ -927,22 +1081,27 @@ optimize_dvec <- function(beta_est,
 
     ## detect elbow point in graph of validation accuracy as a function
     ## of number of retained parameters (again)
-    best_q2 <- qs_2[get_elbow_index(x = nonzero_coeffs_2, y = r2s_2)]
+    elbow_check_2 <- get_elbow_index(x = nonzero_coeffs_2, y = r2s_2)
     if (verbose) {
       cat("second round of dvec optimization complete. q selected:",
-          best_q2, "\n")
+          elbow_check_2$best_value, "\n")
     }
-    best_q2
+    elbow_check_2
   }, error = function(e) {
-    cat("Second round of dvec optimization collapsed due to", 
+    cat("Second round of dvec optimization collapsed due to",
         "lack of sparsity variation in searched q-neighborhood...\n")
-    best_q1
+    NA
   })
+  best_q_ovr <- if (!is.na(elbow_check_2)) elbow_check_2$best_value else best_q1
 
   ## calculate optimal delta vector using optimal q found above
   final_delta_vec <- calculate_dvec_from_q(best_q_ovr)
 
-  final_delta_vec
+  list(
+    delta = final_delta_vec,
+    elbow_check_1 = elbow_check_1,
+    elbow_check_2 = elbow_check_2
+  )
 }
 
 ###############################################################################
@@ -953,11 +1112,13 @@ optimize_dvec <- function(beta_est,
 ## AR error correction until residuals are sufficiently whitened, then returns
 ## the B(s, t) parameters estimated by the first model with sufficiently white
 ## residuals
+#' TODO: document this fully
 hflmds <- function(x, y, center = FALSE, verbose = TRUE,
                    ar_lim_stat = 0.05, ar_lim_practical = 0.15,
                    max_ar_to_check = 10,
                    mode = "inferential",
-                   n_cores = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1"))) {                                  ## nolint
+                   n_cores = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1")),                                    ## nolint
+                   dvec_selection_method = "elbow") {                                                               ## nolint
 
   ## set global variables
   m <- 364
@@ -1045,7 +1206,8 @@ hflmds <- function(x, y, center = FALSE, verbose = TRUE,
     mod_i <- hflmds_inner(x = x_train, y = y_train, ars = ars,
                           m = m, max_lag = max_lag,
                           center = center, verbose = verbose,
-                          n_cores = n_cores)
+                          n_cores = n_cores,
+                          dvec_selection_method = dvec_selection_method)
     residuals_whitened <- tryCatch(
       expr = {
         residual_whiteness(mod_i$b_residuals)
@@ -1102,14 +1264,17 @@ hflmds <- function(x, y, center = FALSE, verbose = TRUE,
 #' @return list of pred_beta, the estimated $B(s, t) coefficients and b_residuals,                                  ## nolint
 #' which are the residuals of X %% b - y. Note that b != B. These residuals are
 #' the ones present when the convovled b coefficients are used for prediction
+#' TODO: document this fully
 hflmds_inner <- function(x, y, ars, center = FALSE, verbose = TRUE, m, max_lag,
-                   n_cores = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1"))) {                                  ## nolint
+                         n_cores = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1")),                              ## nolint
+                         dvec_selection_method) {                                                                   ## nolint
 
   ## set hyperparameter optimization variables
-  n_grid <- 10
-  n_gp <- 75
-  w_h_range <- c(-20, 20)
-  w_v_range <- c(-20, 20)
+  ## #FIXME: MAKE THESE ALL PASSED PARAMS - NO MORE HARDCODING
+  n_grid <- 20
+  n_gp <- 30
+  w_h_range <- c(-20, 30)
+  w_v_range <- c(-20, 30)
   hp_datasplit <- c(0.75, 0.25)
 
   ## set quantile thresholding variables
@@ -1141,11 +1306,12 @@ hflmds_inner <- function(x, y, ars, center = FALSE, verbose = TRUE, m, max_lag,
   }
 
   ## optimize hyperparameters
-  hyperparams_init <- optimize_hyperparameters(m = m, max_lag = max_lag, ars = ars,                                 ## nolint
+  init_hp_fit_info <- optimize_hyperparameters(m = m, max_lag = max_lag, ars = ars,                                 ## nolint
                                                n_grid = n_grid, n_gp = n_gp,
                                                w_h_range = w_h_range, w_v_range = w_v_range,                        ## nolint
                                                x = x, y = y, dvec = NULL, datasplit = hp_datasplit,                 ## nolint
                                                verbose = verbose, n_cores = n_cores)                                ## nolint
+  hyperparams_init <- init_hp_fit_info$hyperparameters
 
   ## fit (an) initial model
   b_init <- perform_fit(m = m, max_lag = max_lag, ars = ars,
@@ -1163,19 +1329,34 @@ hflmds_inner <- function(x, y, ars, center = FALSE, verbose = TRUE, m, max_lag,
     })
   }
 
-  ## optimize dvec using bootstrapped models
-  optimal_dvec <- optimize_dvec(beta_est = b_init, m = m, max_lag = max_lag, ars = ars,                             ## nolint
-                                x = x, y = y, w_h = hyperparams_init$w_h, w_v = hyperparams_init$w_v,               ## nolint
-                                nq1 = nq1, nq2 = nq2, max_q = max_q,
-                                datasplit = dvec_datasplit,
-                                verbose = verbose, n_cores = n_cores)
+  ## optimize dvec using EITHER
+  ##  1. elbow method (cheaper but more aggressive)
+  ##  2. "sparsest model within standard error" method (less aggressive but more computationally expensive)         ## nolint
+  if (dvec_selection_method == "elbow") {
+    dvec_fit_info <- optimize_dvec_elbow(beta_est = b_init, m = m, max_lag = max_lag, ars = ars,                    ## nolint
+                                         x = x, y = y, w_h = hyperparams_init$w_h, w_v = hyperparams_init$w_v,      ## nolint
+                                         nq1 = nq1, nq2 = nq2, max_q = max_q,
+                                         datasplit = dvec_datasplit,
+                                         verbose = verbose, n_cores = n_cores)
+  } else {
+    if (dvec_selection_method != "within_se") {
+      warning(paste0(
+        "Invalid dvec_selection_method (", dvec_selection_method, ")",
+        ". Defaulting to \"within_se\""
+      ))
+    }
+    dvec_fit_info <- NA
+    stop("NEW OPTIMIZE_DVEC METHOD NOT IMPLEMENTED")
+  }
+  optimal_dvec <- dvec_fit_info$delta
 
   ## refit hyperparameters using optimal dvec
-  hyperparams_final <- optimize_hyperparameters(m = m, max_lag = max_lag, ars = ars,                                ## nolint
+  final_hp_fit_info <- optimize_hyperparameters(m = m, max_lag = max_lag, ars = ars,                                ## nolint
                                                 n_grid = n_grid, n_gp = n_gp,
                                                 w_h_range = w_h_range, w_v_range = w_v_range,                       ## nolint
                                                 x = x, y = y, dvec = optimal_dvec, datasplit = hp_datasplit,        ## nolint
                                                 verbose = verbose, n_cores = n_cores)                               ## nolint
+  hyperparams_final <- final_hp_fit_info$hyperparameters
 
   cat(
     "\n\n performing final fit with params:\n",
@@ -1210,5 +1391,6 @@ hflmds_inner <- function(x, y, ars, center = FALSE, verbose = TRUE, m, max_lag,
     })
   }
 
+  ## FIXME: make sure to return EVERYTHING so that this code is fully observable post-mortem ## nolint
   list(pred_beta = b_final, b_residuals = b_residuals)
 }
