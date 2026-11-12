@@ -61,8 +61,6 @@ shinyServer(function(input, output, session) {
       map_df$opacity <- ifelse(map_df$cluster == 0, 0.2, 0.85)
       map_df$radius <- ifelse(map_df$cluster == 0, 2, 3)
 
-      map_df[map_df$model_identifier == "5017_centered", "radius"] <- 20
-
       hide_outliers_toggle <- input$hide_outliers_toggle
       if (isTRUE(hide_outliers_toggle)) {
         map_df <- map_df[map_df$cluster != 0L, , drop = FALSE]
@@ -153,6 +151,14 @@ shinyServer(function(input, output, session) {
                   input$coloring_regime,
                   ") passed to map generation in server.\n"))
     }
+
+    representatives_ <- read.csv("../representative catchments/catchments_100.csv")$gridcode  ## nolint
+    map_df[
+      sapply(map_df$model_identifier, function(id__) {
+        str_split(id__, "_")[[1]][1] %in% representatives_
+      }),
+      "radius"
+    ] <- 20
 
     output$clustering_map <- renderLeaflet({
       leaflet() |>

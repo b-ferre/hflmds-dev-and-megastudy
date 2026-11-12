@@ -25,10 +25,17 @@ for (i in seq_along(all_files)) {
   # read file
   data <- read_func(filepath)
 
+  # remove leap days for convenience
+  data <- data[!grepl("-02-29$", data$date), ]
+
   # discard any catchment with < 30 sufficiently uncorrupted years of data
   # meaning years that are less than 1% corrupted, each
-  stop("IMPLEMENT LINE 30")
-  goodness_df$data_len_flg[goodness_df_index] <- TRUE
+  n_full_years <- floor(length(data$streamflow_mmd) / 365)
+  get_idxs <- seq_len(n_full_years * 365)
+  sflow_mat <- matrix(data$streamflow_mmd[get_idxs], ncol = 365, byrow = TRUE)
+  stopifnot(nrow(sflow_mat) == n_full_years)
+  bad_data_ratios <- rowMeans(!is.finite(sflow_mat))
+  goodness_df$data_len_flg[goodness_df_index] <- sum(bad_data_ratios < 0.01) < 30                                          ## nolint
 
   # discard any catchment that is not approximately closed
   avg_p <- mean(data$precipitation_mmd, na.rm = TRUE)
@@ -76,7 +83,7 @@ discard <- goodness_df$data_len_flg | goodness_df$closure_flg_1 | goodness_df$cl
 keep <- !discard
 cat(
   "the following number of catchments did not pass the following checks:\n",
-  "   > data length :", bad_data, "\n",
+  "   > insufficient uncorrupted data :", bad_data, "\n",
   "   > closure 1 (net loss) :", bad_cls_1, "\n",
   "   > closure 2 (net gain) :", bad_cls_2, "\n",
   "   > rain domination :", bad_snow, "\n",
@@ -90,6 +97,7 @@ passed_files <- goodness_df$fname_[keep]
 gs <- str_remove(basename(passed_files), "\\.csv$")
 
 # reformat, clean, and save data for all usable catchments
+num_yrs_kept <- c()
 p <- txtProgressBar(min = 0, max = length(passed_files), style = 3)
 for (j in seq_along(passed_files)) {
   filepath <- passed_files[j]
@@ -116,8 +124,11 @@ for (j in seq_along(passed_files)) {
   x <- matrix(data$precipitation_mmd[seq_len(valid_length)], nrow = nyears, ncol = 365, byrow = TRUE)                                           ## nolint
   y <- matrix(data$streamflow_mmd[seq_len(valid_length)], nrow = nyears, ncol = 365, byrow = TRUE)                                              ## nolint
 
-  # delete any year that is >10% corrupted
-  stop("IMPLEMENT LINE 120")
+  # delete any year that is >5% corrupted
+  keep_yrs <- rowMeans(!is.finite(y)) < 0.05
+  x <- x[keep_yrs, ]
+  y <- y[keep_yrs, ]
+  num_yrs_kept <- c(num_yrs_kept, sum(keep_yrs))
 
   # save files
   saveRDS(x, file = paste0("./data/processed/grid", grid_id, "_rain.rds"))
