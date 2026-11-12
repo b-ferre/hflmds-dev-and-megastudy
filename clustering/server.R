@@ -136,13 +136,15 @@ shinyServer(function(input, output, session) {
       map_df$opacity <- rep(1, nrow(map_df))
       map_df$radius <- rep(3, nrow(map_df))
 
-    } else if (input$coloring_regime == "Kernel Realism (Ranks)") {
-      metrics_to_use <- precomputed_kernel_metrics[
-        names(precomputed_kernel_metrics) %in% considered_catchments
-      ]
-      scores <- rank(metrics_to_use, ties.method = "average") / length(metrics_to_use)          ## nolint
+    } else if (input$coloring_regime == "Kernel Goodness") {
+      kge_goodness_thresh <- input$kge_goodness_thresh
+      req(kge_goodness_thresh)
 
-      map_df$color <- map_scores_to_rg_pal(scores, threshold = 0.5)                                           ## nolint
+      scores <- log(precomputed_kernel_goodness_df$goodness[
+        precomputed_kernel_goodness_df$model_identifier %in% considered_catchments                            ## nolint
+      ])
+
+      map_df$color <- map_scores_to_rg_pal(scores, kge_goodness_thresh)                                       ## nolint
       map_df$opacity <- rep(1, nrow(map_df))
       map_df$radius <- rep(3, nrow(map_df))
 
@@ -243,38 +245,6 @@ shinyServer(function(input, output, session) {
       cluster_ids = cluster_ids_by_polygon,
       dszn_bool = clust_res$dszn_bool_vec
     ))
-
-    # # Recalculated when clustering or heatmap geometry changes.
-    # cat("about to calculate polygon representatives...\n")
-    # representatives_by_polygon <- lapply(
-    #   model_ids_by_polygon,
-    #   function(model_ids) {
-    #     if (length(model_ids) == 0L) return(NULL)
-
-    #     betas <- precomputed_beta_matrix[
-    #       model_ids, , drop = FALSE
-    #     ]
-
-    #     distances <- clust_res$dist_mat[
-    #       model_ids, model_ids, drop = FALSE
-    #     ]
-
-    #     medoid_id <- model_ids[which.min(rowSums(distances))]
-
-    #     list(
-    #       n = length(model_ids),
-    #       medoid_id = medoid_id,
-    #       betas = list(
-    #         Mean = colMeans(betas),
-    #         Median = apply(betas, 2, stats::median),
-    #         Medoid = precomputed_beta_matrix[medoid_id, ]
-    #       )
-    #     )
-    #   }
-    # )
-    # cat("done.\n")
-
-    # heatmap_click_data(representatives_by_polygon)
 
     heatmap_pal <- colorFactor(
       palette = unname(clust_colors),
@@ -703,7 +673,7 @@ shinyServer(function(input, output, session) {
           inputId = "kge_goodness_thresh",
           label = "Break Point Between Bad (Red) and Good (Green) Values of Selected Coloring Feature", ## nolint
           min = 0,
-          max = 1,
+          max = if (input$coloring_regime == "Kernel Goodness") 100 else 1,
           value = 0.2,
           step = 0.05
         )
@@ -954,10 +924,7 @@ shinyServer(function(input, output, session) {
 
     featwts <- setNames(
       sapply(all_feat_weight_names, function(nm) {
-        # cat("about to req", nm, "\n") ## nolint
-        # print(input[[nm]]) ## nolint
         req(input[[nm]])
-        # cat("done req-ing", nm, "\n") ## nolint
         input[[nm]]
       }),
       all_feat_names
@@ -1002,6 +969,9 @@ shinyServer(function(input, output, session) {
     min_kge_for_clust <- input$min_kge_for_clust
     req(min_kge_for_clust)
 
+    min_goodness_for_clust <- input$min_goodness_for_clust
+    req(min_goodness_for_clust)
+
     ignore_negative_betas <- input$remove_negative_beta_ests
 
     outlier_thresh <- input$pre_clust_outlier_trim
@@ -1017,6 +987,7 @@ shinyServer(function(input, output, session) {
       deseasonalization_scheme = dszn_scheme,
       deseasonalization_cutoff = dszn_cutoff,
       min_kge_for_inclusion = min_kge_for_clust,
+      min_goodness_for_inclusion = min_goodness_for_clust,
       ignore_negative_beta_ests = ignore_negative_betas,
       clustering_algorithm_params = algo_hyperparams,
       outlier_thresh = outlier_thresh,

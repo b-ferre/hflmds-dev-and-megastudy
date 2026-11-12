@@ -82,6 +82,7 @@ INITCLUSTERSETTINGS <- c(                                                       
     deseasonalization_selection = "DEFAULT",                                                     ## nolint
     dszn_thresh_selection = 0,
     min_kge_for_clust = "DEFAULT", #0.4,
+    min_goodness_for_clust = 0,
     pre_clust_outlier_trim = 0.10,
     pre_clust_outlier_neighbor_index = 2,
     remove_negative_beta_ests = TRUE,
@@ -108,6 +109,9 @@ precomputed_beta_matrix <- readRDS("precomputed_beta_mtx.rds")
 
 ## load scores dataframe
 precomputed_score_df <- readRDS("precomputed_score_df.rds")
+
+## load kernel goodness dataframe
+precomputed_kernel_goodness_df <- readRDS("precomputed_kernel_goodness_df.rds")
 
 ## get a list of unique GRIDCODES (not unique model_identifiers)
 unique_gridcodes <- unique(
@@ -168,7 +172,7 @@ get_inf_r2 <- function(gridcode, dszn_bool) {
 #' @return a levelplot() object of B(s, t) values with x = day and y = lag and
 #' optionally, the vectors for smooth_delta and delta overlayed
 plot_beta <- function(
-  bvec, title = "", ncolors = 20, m = 364, max_lag = 150,
+  bvec, title = "", ncolors = 100, m = 364, max_lag = 150,
   delta = NULL, smooth_delta = NULL, simplified = FALSE
 ) {
   bgrid <- cbind(expand.grid(s = seq_len(max_lag), t = seq_len(m + 1)), b = bvec)           ## nolint
@@ -295,7 +299,6 @@ render_beta_and_derived_feats <- function(bvec, plot_data) {
   beta_plot <- plot_beta(
     bvec,
     title = "Beta Surface and Delta Vectors",
-    ncolors = p$ncolors,
     m = p$m,
     max_lag = p$max_lag,
     delta = p$delta,
@@ -375,6 +378,7 @@ get_clustering_result <- function(
   deseasonalization_scheme,
   deseasonalization_cutoff,
   min_kge_for_inclusion,
+  min_goodness_for_inclusion,
   ignore_negative_beta_ests,
   clustering_algorithm_params,
   outlier_thresh,
@@ -408,7 +412,7 @@ get_clustering_result <- function(
   ## trim our list of model identifiers using min_kge_for_inclusion such that
   ## only models with an inferential kge above this cutoff are included in
   ## clustering
-  to_keep <- as.vector(sapply(models_to_consider, function(model_id_) {
+  to_keep1 <- as.vector(sapply(models_to_consider, function(model_id_) {
     if (min_kge_for_inclusion == "DEFAULT") {
       pred_score <- precomputed_score_df$pred_kge[
         precomputed_score_df$model_identifier == model_id_
@@ -429,9 +433,24 @@ get_clustering_result <- function(
       ] >= as.numeric(min_kge_for_inclusion)
     }
   }))
-  models_to_use <- models_to_consider[to_keep]
+  models_to_use1 <- models_to_consider[to_keep1]
   if (debugmode) {
     cat("  > trimming low KGE models. removed",
+        length(to_keep1) - sum(to_keep1), "of", length(to_keep1),
+        "models, leaving", sum(to_keep1), "\n")
+  }
+
+  ## trim our list of model identifiers using min_kge_for_inclusion such that
+  ## only models with an inferential kge above this cutoff are included in
+  ## clustering
+  to_keep <- as.vector(sapply(models_to_use1, function(model_id_) {
+    precomputed_kernel_goodness_df$goodness[
+      precomputed_kernel_goodness_df$model_identifier == model_id_
+    ] >= min_goodness_for_inclusion
+  }))
+  models_to_use <- models_to_use1[to_keep]
+  if (debugmode) {
+    cat("  > trimming low \"goodness\" models. removed",
         length(to_keep) - sum(to_keep), "of", length(to_keep),
         "models, leaving", sum(to_keep), "\n")
   }

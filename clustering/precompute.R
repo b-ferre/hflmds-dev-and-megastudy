@@ -308,6 +308,43 @@ stopifnot(!any(unlist(lapply(precomputed_feature_dist_mats, function(mat) {
 stopifnot(!any(unlist(lapply(precomputed_feature_dist_mats, function(m) any(!is.finite(m))))))                      ## nolint
 
 ###############################################################################
+############# HEURISTIC KERNEL GOODNESS MEASURE CALCULATION ###################
+###############################################################################
+cat("Calculating Kernel \"Goodness\" Metrics...\n")
+source("./kernel_quality.R")
+z <- nrow(beta_mtx)
+kernel_qualities_df <- data.frame(
+  model_identifier = rownames(beta_mtx),
+  negative_comp = rep(NA, z),
+  lag_spike_comp = rep(NA, z),
+  temporal_comp = rep(NA, z),
+  tail_comp = rep(NA, z),
+  patches_comp = rep(NA, z),
+  roughness = rep(NA, z),
+  goodness = rep(NA, z)
+)
+
+p <- txtProgressBar(min = 0, max = z, style = 3)
+for (model_id_ in kernel_qualities_df$model_identifier) {
+  qualities_ <- kernel_qualities(beta_mtx[model_id_, ])
+  scores_ <- kernel_goodness(qualities_)
+
+  r_ <- which(kernel_qualities_df$model_identifier == model_id_)
+
+  kernel_qualities_df$negative_comp[r_] <- qualities_$negative
+  kernel_qualities_df$lag_spike_comp[r_] <- qualities_$lag_spikes
+  kernel_qualities_df$temporal_comp[r_] <- qualities_$temporal
+  kernel_qualities_df$tail_comp[r_] <- qualities_$tail
+  kernel_qualities_df$patches_comp[r_] <- qualities_$patches
+
+  kernel_qualities_df$goodness[r_] <- scores_$goodness
+  kernel_qualities_df$roughness[r_] <- scores_$roughness
+
+  setTxtProgressBar(p, r_)
+}
+close(p)
+
+###############################################################################
 ###################### PLOT & SCORE DF GENERATION #############################
 ###############################################################################
 # pre-plot all B(s, t) plots
@@ -318,11 +355,7 @@ precomputed_score_df <- data.frame(
   pred_kge = rep(NA, n),
   pred_r2 = rep(NA, n),
   inf_kge = rep(NA, n),
-  inf_r2 = rep(NA, n),
-  seasonal_mean_kge = rep(NA, n),
-  seasonal_median_kge = rep(NA, n),
-  seasonal_mean_r2 = rep(NA, n),
-  seasonal_median_r2 = rep(NA, n)
+  inf_r2 = rep(NA, n)
 )
 
 cat("Pre-Plotting Beta Surface Plots...\n")
@@ -351,7 +384,10 @@ for (identifier in model_idents) {
                          "(Predictive)   KGE: ", pred_kge,
                          "   R2: ", pred_r2, "\n",
                          "(Inferential)   KGE: ", inf_kge,
-                         "   R2: ", inf_r2, "\n")
+                         "   R2: ", inf_r2, "\n",
+                         "Goodness (Inf): ", kernel_qualities_df$goodness[
+                           kernel_qualities_df$model_identifier == identifier
+                         ])
 
   precomputed_beta_plots[[identifier]] <- calculate_plot_info(beta_mtx[identifier, ],                               ## nolint
                                                               title = title_string)                                 ## nolint
@@ -451,3 +487,9 @@ saveRDS(precomputed_feature_dist_mats, file = "precomputed_feature_dist_mtxs.rds
 ## score df
 cat("Saving Score Data Frame...\n")
 saveRDS(precomputed_score_df, file = "precomputed_score_df.rds")
+
+## kernel goodness df
+cat("Saving Kernel \"Goodness\" Metrics...\n")
+saveRDS(kernel_qualities_df, file = "precomputed_kernel_goodness_df.rds")
+
+cat("DONE\n")

@@ -1,17 +1,11 @@
 # heuristic measure of the "realism" of a given B(s, t) surface
-kernel_quality <- function(kernel, max_lag = 150L, include_tail = FALSE,
-                           support_tolerance = 0.001,
-                           weights = c(negative = 12, lag_spikes = 6,
-                                       temporal = 10, tail = 1,
-                                       patches = 2)) {
+kernel_qualities <- function(kernel,
+                             max_lag = 150L,
+                             support_tolerance = 0) {
 
   ## validate support tolerance and weight values
-  if (support_tolerance <= 0 || support_tolerance >= 1) {
+  if (support_tolerance < 0 || support_tolerance >= 1) {
     stop("support_tolerance must be between zero and one.")
-  }
-  required <- c("negative", "lag_spikes", "patches", "temporal", "tail")
-  if (!setequal(names(weights), required) || any(weights < 0)) {
-    stop("weights must be nonnegative and named for the five components.")
   }
 
   ## transform kernel into a matrix for easier computation of roughnesses
@@ -131,15 +125,31 @@ kernel_quality <- function(kernel, max_lag = 150L, include_tail = FALSE,
 
 
   ## combine all component weights into final kernel goodness measure
-  components <- c(negative = negative, lag_spikes = lag_spikes,
-                  temporal = temporal, tail = tail_penalty)
-  contributions <- components * weights[names(components)]
+  list(negative = negative, lag_spikes = lag_spikes,
+       temporal = temporal, tail = tail_penalty, patches = patches)
+}
+
+
+kernel_goodness <- function(
+  kernel_qualities,
+  weights = c(negative = 12, lag_spikes = 6,
+              temporal = 10, tail = 1,
+              patches = 2),
+  include_tail = FALSE
+) {
+
+  required <- c("negative", "lag_spikes", "patches", "temporal", "tail")
+  if (!setequal(names(weights), required) || any(weights < 0) || !setequal(names(kernel_qualities), required)) {   ## nolint
+    stop("weights must be nonnegative and named for the five components.")
+  }
+
+  contributions <- as.numeric(kernel_qualities) * weights[names(kernel_qualities)]  ## nolint
   if (!include_tail) contributions["tail"] <- 0
   roughness <- sum(contributions)
-  list(goodness = 100 * exp(-roughness),    ## rescale into (0, 100]
-       roughness = unname(roughness),
-       components = components,
-       patches = patches,
-       contributions = contributions,
-       tail_days_assessed = length(days))
+  goodness <- 100 * exp(-roughness)
+
+  list(
+    roughness = roughness,
+    goodness = goodness
+  )
 }

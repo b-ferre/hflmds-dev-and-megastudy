@@ -225,6 +225,12 @@ shinyUI(fluidPage(
             ),
             selected = INITCLUSTERSETTINGS$min_kge_for_clust
           ),
+          sliderInput(
+            inputId = "min_goodness_for_clust",
+            label = "Minimum \"Goodness\" to Use in Clustering",
+            min = 0, max = 100,
+            value = INITCLUSTERSETTINGS$min_goodness_for_clust, step = 0.5
+          ),
           checkboxInput(
             inputId = "remove_negative_beta_ests",
             label = "Remove Catchments With Any Negative B(s, t) Estimates",
@@ -265,7 +271,7 @@ shinyUI(fluidPage(
                 "Predictive KGE - Inferential KGE",
                 "Uncentered KGE - Centered KGE",
                 "Inferential KGE - Benchmark KGE",
-                "Kernel Realism (Ranks)"
+                "Kernel Goodness"
               ),
               selected = INITCLUSTERSETTINGS$coloring_regime
             )
