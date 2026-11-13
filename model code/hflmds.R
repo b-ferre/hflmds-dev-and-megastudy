@@ -2,9 +2,14 @@ library(Matrix)
 library(GPfit)
 library(hydroGOF)
 
-## Fork-based parallelism is available on Fir (Linux). Keep one core available
-## when n_cores is omitted, and fall back to serial evaluation off-cluster.
-parallel_lapply <- function(x, fun, n_cores = 1L) {
+#' helper for making flexible use of parallelism
+#' when n_cores > 1, we use fork-based parallelism as on the compute canada
+#' fir cluster, but when n_cores = 1 (i.e. we are running locally), we default
+#' to serial application
+#' @param x is the list to apply the function to
+#' @param fun is the function to apply to each element of the list
+#' @param n_cores is the number of cores available for parallelised computation
+parallel_lapply <- function(x, fun, n_cores) {
   n_cores <- as.integer(n_cores)
   if (length(n_cores) != 1L || is.na(n_cores) || n_cores < 1L) n_cores <- 1L
   n_cores <- max(1L, min(n_cores, length(x)))
@@ -15,8 +20,14 @@ parallel_lapply <- function(x, fun, n_cores = 1L) {
   }
 }
 
-## helper for checking if given set of arcfs are stationary
-## TODO: document properly
+#' helper for checking if given set of arcfs are stationary
+#' @param phi is the set of AR coefficients to test
+#' @param tolerance is the tolerance for near-one values
+#'
+#' @return a boolean indicating whether the roots of the
+#' characteristic polynomial of the given AR coefficients
+#' all lie within the unit circle (i.e. the corresponding
+#' AR process is stationary)
 is_stationary <- function(phi, tolerance = 1e-6) {
   if (length(phi) == 0L) {
     return(TRUE)
@@ -57,8 +68,8 @@ is_stationary <- function(phi, tolerance = 1e-6) {
 #' x (and y if ars !=0) and masked according to dvec, and a truncated y vector
 #' such that design matrix %*% bvec ~ y
 get_design_matrix <- function(x, y, first_day_index,
-                              m, max_lag, ars = 0,
-                              remove_na_rows = TRUE) {
+                              m, max_lag, ars,
+                              remove_na_rows) {
 
   if (length(x) != length(y) || length(y) < max_lag + ars) {
     stop("x and y must have equal lengths and enough observations for the lags.")              ## nolint
@@ -145,7 +156,7 @@ get_design_matrix <- function(x, y, first_day_index,
 #' first and second differences, respectively
 #'
 #' @returns a list of d_h and d_v - the day-wise and lag-wise regularization matrices     ## nolint
-get_regularization_mats <- function(m, max_lag, ars = 0, d_v_diff = 1) {
+get_regularization_mats <- function(m, max_lag, ars, d_v_diff) {
 
   ## build d_h
   nrow_h <- (m + 1) * (max_lag + ars)
@@ -225,9 +236,17 @@ get_regularization_mats <- function(m, max_lag, ars = 0, d_v_diff = 1) {
 #'
 #' @param dvec if provided, corresponds to the sequence of lags after which the
 #' covariate is assumed to have no effect on the target variable and zeroed out
-perform_fit <- function(m, max_lag, ars = 0,
-                        w_h, w_v,
-                        x, y, first_day_index, dvec = NULL) {
+#'
+#' @param remove_na_rows is a boolean indicating whether any row of the design
+#' matrix/target vector with non-finite entries should be trimmed before the
+#' linear system is solved
+#'
+#' @return a vector b which minimizes:
+#'       ||Zb - y|| + exp(w_h)||D_hb|| + exp(w_v)||D_vb||
+#' where Z is a design matrix composed of x (and potentially y) values
+perform_fit <- function(m, max_lag, ars, w_h, w_v,
+                        x, y, first_day_index, dvec,
+                        remove_na_rows) {
 
   ## get regularization matrices
   regmats <- get_regularization_mats(m, max_lag, ars)
@@ -237,7 +256,7 @@ perform_fit <- function(m, max_lag, ars = 0,
   fit_mats <- get_design_matrix(x = x, y = y,
                                 first_day_index = first_day_index,
                                 m = m, max_lag = max_lag,
-                                ars = ars)
+                                ars = ars, remove_na_rows = remove_na_rows)
   design_mat <- fit_mats$design_matrix
   y_trunc <- fit_mats$y_trunc
 
@@ -287,15 +306,20 @@ perform_fit <- function(m, max_lag, ars = 0,
 #' @param dvec if provided, corresponds to the sequence of lags after which the
 #' covariate is assumed to have no effect on the target variable and zeroed out
 #'
-#' @return a list of y_hat and y_true
+#' @param remove_na_rows is a boolean indicating whether any row of the design
+#' matrix/target vector with non-finite entries should be trimmed before the
+#' linear system is solved
+#'
+#' @return a list of y_hat (predictions generated using bvec) and y_true
 calculate_yhat <- function(bvec, x, y,
                            first_day_index,
-                           m, max_lag, ars = 0) {
+                           m, max_lag, ars,
+                           remove_na_rows) {
   design <- get_design_matrix(x = x, y = y,
                               first_day_index = first_day_index,
                               m = m, max_lag = max_lag,
                               ars = ars,
-                              remove_na_rows = FALSE)
+                              remove_na_rows = remove_na_rows)
   design_mat <- design$design_matrix
   true_y <- design$y_trunc
 
@@ -330,13 +354,19 @@ calculate_yhat <- function(bvec, x, y,
 #'
 #' @param dvec if provided, corresponds to the sequence of lags after which the
 #' covariate is assumed to have no effect on the target variable and zeroed out
+#'
+#' @param remove_na_rows is a boolean indicating whether any row of the design
+#' matrix/target vector with non-finite entries should be trimmed before the
+#' linear system is solved
 calculate_predictive_kge <- function(bvec, x, y,
                                      first_day_index,
-                                     m, max_lag, ars = 0) {
+                                     m, max_lag, ars,
+                                     remove_na_rows) {
   ## build design matrix and y_trunc
   fit_mats <- get_design_matrix(x = x, y = y,
                                 first_day_index = first_day_index,
-                                m = m, max_lag = max_lag, ars = ars)
+                                m = m, max_lag = max_lag, ars = ars,
+                                remove_na_rows = remove_na_rows)
 
   pred_y <- as.numeric(fit_mats$design_matrix %*% bvec)
   y_trunc <- fit_mats$y_trunc
@@ -370,13 +400,19 @@ calculate_predictive_kge <- function(bvec, x, y,
 #'
 #' @param dvec if provided, corresponds to the sequence of lags after which the
 #' covariate is assumed to have no effect on the target variable and zeroed out
+#'
+#' @param remove_na_rows is a boolean indicating whether any row of the design
+#' matrix/target vector with non-finite entries should be trimmed before the
+#' linear system is solved
 calculate_predictive_r2 <- function(bvec, x, y,
                                     first_day_index,
-                                    m, max_lag, ars = 0) {
+                                    m, max_lag, ars,
+                                    remove_na_rows) {
   ## build design matrix and y_trunc
   fit_mats <- get_design_matrix(x = x, y = y,
                                 first_day_index = first_day_index,
-                                m = m, max_lag = max_lag, ars = ars)
+                                m = m, max_lag = max_lag, ars = ars,
+                                remove_na_rows = remove_na_rows)
 
   pred_y <- as.numeric(fit_mats$design_matrix %*% bvec)
   y_trunc <- fit_mats$y_trunc
@@ -393,10 +429,9 @@ calculate_predictive_r2 <- function(bvec, x, y,
 #' @param m is the length of the cycle which t is indexed to minus 1
 #' @param max_lag is the number of effective lags s to consider (starting at 0)
 #' @param arcfs are the actual estimated ar coefficients used for deconvolution
+#'
+#' @return a matrix M such that M*beta = b
 get_conv_mtx <- function(arcfs, m, max_lag) {
-
-  ## FIXME: actually check this code instead of blindly trusting chatslop
-
   ars <- length(arcfs)
 
   max_elements <- (max_lag * (m + 1)) + (max_lag * (m + 1) * ars)
@@ -451,6 +486,7 @@ get_conv_mtx <- function(arcfs, m, max_lag) {
 #' @param max_lag is the number of effective lags s to consider (starting at 0)
 #' @param ars is a positive integer representing the degree of the ar
 #' process used to model the residuals
+#'
 #' @return a list of pred_beta (the IRF coeffs) and pred_phi (the AR coeffs)
 deconvolve_b_to_beta <- function(bvec, m, max_lag, ars) {
 
@@ -486,8 +522,9 @@ deconvolve_b_to_beta <- function(bvec, m, max_lag, ars) {
 #' process used to model the residuals
 #' @param dvec is the sequence of maximum effective lags for each day t
 #'
-#' @return a lag-minor indexed vector of B(s, t) coefficients
-get_beta_from_b_safely <- function(bvec, m, max_lag, ars, dvec = NULL) {
+#' @return a lag-minor indexed vector of B(s, t) coefficients constructed
+#' by deconvolving a set of b coefficients
+get_beta_from_b_safely <- function(bvec, m, max_lag, ars, dvec) {
   if (ars > 0) {
     if (is.null(dvec)) {
       dvec <- rep(max_lag, (m + 1))
@@ -533,23 +570,32 @@ get_beta_from_b_safely <- function(bvec, m, max_lag, ars, dvec = NULL) {
 #' covariate is assumed to have no effect on the target variable and zeroed out
 #'
 #' @param datasplit is a vector of the form (training frac, validation frac)
-#' which dictates how x and y should be partitioned
-#'
-#' @param verbose is a boolean dictating whether a progress bar for the
-#' two rounds of optimization should be displayed
-#'
-#' TODO: finish documenting
-#' TODO: finish making completely observable post-mortem
+#' which dictates the fractions of the total data time series that should be
+#' used for the training and validation set, respectively
+#' @param verbose is a boolean dictating whether progress updates should be
+#' printed during optimization routine
+#' @param n_cores is the number of cores available for parallelising this opt.
+#' @param k_folds_for_cv is the number of folds to use for k-fold cross
+#' validation in order to get more stable estimates of validation error and
+#' to estimate standard errors for use with our final prior-informed hp
+#' selection method
+#' @param d_v_diff the degree of differences to penalize in the lag direction
+#' (1 -> first diff i.e. Ridge Reg., 2 -> second diff i.e. Tikhonov-Phillips)
+#' @param large_hp_pseudoprior is a boolean indicating whether our final
+#' hyperparameter selection should make use of a physically informed
+#' "pseudoprior" where we select the most strongly regularized model that
+#' scored within 1 SE of the best validation score. If this value is FALSE
+#' we simply choose the pair of hyperparameters that correspond to the absolute
+#' best validation error
 #'
 #' @returns the optimal values of log(w_h) and log(w_v)
+#' FIXME: finish making this completely observable post-mortem
 optimize_hyperparameters <- function(m, max_lag, ars,
                                      n_grid, n_gp, w_h_range, w_v_range,
-                                     x, y, dvec = NULL,
-                                     datasplit = c(0.75, 0.25),
-                                     verbose = TRUE, n_cores = 1L,
-                                     k_folds_for_cv = 1,
-                                     d_v_diff = 1,
-                                     large_hp_pseudoprior = FALSE) {
+                                     x, y, dvec, datasplit,
+                                     verbose, n_cores,
+                                     k_folds_for_cv, d_v_diff,
+                                     large_hp_pseudoprior) {
 
   ## assign a default dvec if none was provided
   if (is.null(dvec)) {
@@ -853,14 +899,11 @@ optimize_hyperparameters <- function(m, max_lag, ars,
 #' TODO: finish making entirely observable post-mortem
 #'
 optimize_dvec_elbow <- function(beta_est,
-                                m, max_lag, ars = 0,
-                                x, y,
-                                nq1 = 100, nq2 = 100,
-                                max_q = 0.5,
-                                datasplit = c(0.75, 0.25),
-                                w_h, w_v,
-                                grp_norm_calc_method = "new",
-                                verbose = TRUE, n_cores = 1L) {
+                                m, max_lag, ars, x, y,
+                                nq1, nq2, max_q,
+                                datasplit, w_h, w_v,
+                                grp_norm_calc_method,
+                                verbose, n_cores) {
 
   n_cores <- max(1L, as.integer(n_cores))
 
@@ -873,14 +916,23 @@ optimize_dvec_elbow <- function(beta_est,
 
   ## calculate day-relative group values of the provided beta_est
   if (grp_norm_calc_method == "new") {
+
+    #FIXME: carefully think through this and update code
+
     stop("NEW GRP NORM CALCULATION METHOD NOT YET FINALIZED")
-    ##FIXME: update this to work the way I want
-    # group_values <- unlist(lapply(seq_len(m + 1), function(day_index) {
-    #   beta_t <- beta_est[(((day_index - 1) * max_lag) + 1):(day_index * max_lag)]
-    #   daytotal <- sum(beta_t)
-    #   cumsums <- rev(cumsum(rev(beta_t)))
-    #   cumsums / daytotal
-    # }))
+    daytotals <- sapply(seq_len(m + 1), function(day_index) {
+      sum(beta_est[(((day_index - 1) * max_lag) + 1):(day_index * max_lag)])
+    })
+
+    kappa <- 0.1
+    min_day_denom <- quantile(daytotals, kappa)
+
+    group_values <- unlist(lapply(seq_len(m + 1), function(day_index) {
+      beta_t <- beta_est[(((day_index - 1) * max_lag) + 1):(day_index * max_lag)]
+      daytotal <- sum(beta_t)
+      cumsums <- rev(cumsum(rev(beta_t)))
+      cumsums / daytotal
+    }))
   } else {
     if (grp_norm_calc_method != "old") warning("Invalid grp_norm_calc_method. Defaulting to old.")  ## nolint
     group_values <- unlist(lapply(seq_len(m + 1), function(day_index) {
@@ -1114,11 +1166,13 @@ optimize_dvec_elbow <- function(beta_est,
 ## residuals
 #' TODO: document this fully
 hflmds <- function(x, y, center = FALSE, verbose = TRUE,
-                   ar_lim_stat = 0.05, ar_lim_practical = 0.15,
-                   max_ar_to_check = 10,
+                   ar_lim_stat = 0.05, ar_lim_practical = 0.15, max_ar_to_check = 10,                               ## nolint
                    mode = "inferential",
                    n_cores = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1")),                                    ## nolint
-                   dvec_selection_method = "elbow") {                                                               ## nolint
+                   n_grid = 13, n_gp = 25, w_h_range = c(-20, 30), w_v_range = c(-20, 30),                          ## nolint
+                   hp_datasplit = c(0.75, 0.25), d_v_diff = 1,
+                   nq1 = 100, nq2 = 100, max_q = 1,
+                   dvec_datasplit = c(0.75, 0.25), dvec_selection_method = "elbow") {                               ## nolint
 
   ## set global variables
   m <- 364
@@ -1265,23 +1319,9 @@ hflmds <- function(x, y, center = FALSE, verbose = TRUE,
 #' which are the residuals of X %% b - y. Note that b != B. These residuals are
 #' the ones present when the convovled b coefficients are used for prediction
 #' TODO: document this fully
-hflmds_inner <- function(x, y, ars, center = FALSE, verbose = TRUE, m, max_lag,
-                         n_cores = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", "1")),                              ## nolint
-                         dvec_selection_method) {                                                                   ## nolint
-
-  ## set hyperparameter optimization variables
-  ## #FIXME: MAKE THESE ALL PASSED PARAMS - NO MORE HARDCODING
-  n_grid <- 20
-  n_gp <- 30
-  w_h_range <- c(-20, 30)
-  w_v_range <- c(-20, 30)
-  hp_datasplit <- c(0.75, 0.25)
-
-  ## set quantile thresholding variables
-  nq1 <- 200
-  nq2 <- 200
-  max_q <- 1
-  dvec_datasplit <- c(0.75, 0.25) ## nolint
+hflmds_inner <- function(x, y, ars, center, verbose, m, max_lag, n_cores,                                           ## nolint
+                         n_grid, n_gp, w_h_range, w_v_range, hp_datasplit, d_v_diff,                                ## nolint
+                         nq1, nq2, max_q, dvec_datasplit, dvec_selection_method) {                                                                   ## nolint
 
   ## perform checks on x and y
   if (length(x) != length(y)) {
@@ -1293,11 +1333,11 @@ hflmds_inner <- function(x, y, ars, center = FALSE, verbose = TRUE, m, max_lag,
 
   ## if indicated, remove the seasonal signal from x and y
   if (center) {
-    xmat <- matrix(x, ncol = 365, byrow = TRUE)
+    xmat <- matrix(x, ncol = m + 1, byrow = TRUE)
     x_signal <- colMeans(xmat, na.rm = TRUE)
     xmat <- sweep(xmat, 2, x_signal, "-")
 
-    ymat <- matrix(y, ncol = 365, byrow = TRUE)
+    ymat <- matrix(y, ncol = m + 1, byrow = TRUE)
     y_signal <- colMeans(ymat, na.rm = TRUE)
     ymat <- sweep(ymat, 2, y_signal, "-")
 
@@ -1357,14 +1397,6 @@ hflmds_inner <- function(x, y, ars, center = FALSE, verbose = TRUE, m, max_lag,
                                                 x = x, y = y, dvec = optimal_dvec, datasplit = hp_datasplit,        ## nolint
                                                 verbose = verbose, n_cores = n_cores)                               ## nolint
   hyperparams_final <- final_hp_fit_info$hyperparameters
-
-  cat(
-    "\n\n performing final fit with params:\n",
-    "  > w_h =", hyperparams_final$w_h, "\n",
-    "  > w_v =", hyperparams_final$w_v, "\n",
-    "  > optimal_dvec saved as \"./optimal_dvec_check.rda\""
-  )
-  save(optimal_dvec, file = "./optimal_dvec_check.rda")
 
   ## perform final model fit
   b_final <- perform_fit(m = m, max_lag = max_lag, ars = ars,
