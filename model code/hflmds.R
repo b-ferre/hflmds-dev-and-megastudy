@@ -2,7 +2,7 @@ library(Matrix)
 library(GPfit)
 library(hydroGOF)
 
-#' helper for making flexible use of parallelism
+### helper for making flexible use of parallelism
 #' when n_cores > 1, we use fork-based parallelism as on the compute canada
 #' fir cluster, but when n_cores = 1 (i.e. we are running locally), we default
 #' to serial application
@@ -20,7 +20,8 @@ parallel_lapply <- function(x, fun, n_cores) {
   }
 }
 
-#' helper for checking if given set of arcfs are stationary
+### check if set of arcfs are stationary  #####
+#'
 #' @param phi is the set of AR coefficients to test
 #' @param tolerance is the tolerance for near-one values
 #'
@@ -142,8 +143,8 @@ get_design_matrix <- function(x, y, first_day_index,
 ## and does so cyclically as the final day of the year should be similar to
 ## the first day of the year
 ##
-## D_v : applies second derivative Tikhonov-Phillips regularization along the
-## s axis of the irf-related parameters
+## D_v : applies first or second derivative Tikhonov-Phillips regularization
+## along the s axis of the irf-related parameters
 ##
 ###################################
 #'
@@ -534,6 +535,9 @@ get_beta_from_b_safely <- function(bvec, m, max_lag, ars, dvec) {
                                 ars = ars)
     if (!is_stationary(dec$pred_phi)) stop("Nonstationary phi found by get_beta_from_b_safely().")                                    ## nolint
     betavec <- dec$pred_beta
+
+    ## re-enforce sparsity as required by dvec to get rid of any
+    ## artificially extended tails from the deconvolution
     betavec[rep(seq_len(max_lag), m + 1) >
               rep(dvec, each = max_lag)] <- 0
     betavec
@@ -589,7 +593,10 @@ get_beta_from_b_safely <- function(bvec, m, max_lag, ars, dvec) {
 #' best validation error
 #'
 #' @returns the optimal values of log(w_h) and log(w_v)
-#' FIXME: finish making this completely observable post-mortem
+
+#' FIXME: finish making this completely observable post-mortem and update the
+#' return portion of the function documentation to reflect this
+
 optimize_hyperparameters <- function(m, max_lag, ars,
                                      n_grid, n_gp, w_h_range, w_v_range,
                                      x, y, dvec, datasplit,
@@ -603,6 +610,11 @@ optimize_hyperparameters <- function(m, max_lag, ars,
   }
 
   print("running optimize_hyperparameters...")
+
+  ## FIXME: currently, the validation design mats also make use of
+  ## lagged target values as additional covariates. this is wrong.
+  ## we validate using the beta parameters, not the full fitted
+  ## b parameters. fix this without creating data leakage.
 
   ## build entire design matrix using all data which will later
   ## be split into train/val splits
@@ -634,7 +646,9 @@ optimize_hyperparameters <- function(m, max_lag, ars,
         train_mat = design_mat_full$design_matrix[train_indexes, , drop = FALSE],                             ## nolint
         train_y = design_mat_full$y_trunc[train_indexes],
         val_mat = design_mat_full$design_matrix[val_indexes, , drop = FALSE],
-        val_y_trunc = design_mat_full$y_trunc[val_indexes]
+        val_y_trunc = design_mat_full$y_trunc[val_indexes],
+        train_indices = train_indexes,
+        val_indices = val_indexes
       )
     }
   )
@@ -708,8 +722,8 @@ optimize_hyperparameters <- function(m, max_lag, ars,
 
       ## return values
       list(
-        mean_val_r2 = mean_r2,
-        se_val_r2 = se_r2
+        r2 = mean_r2,
+        se = se_r2
       )
     }, error = function(e) {
       warning(paste0("score_hp failed with w_h/w_v = ", w_h, "/", w_v, "\n"))
@@ -885,274 +899,466 @@ optimize_hyperparameters <- function(m, max_lag, ars,
 
   list(
     hyperparameters = list(w_h = best_w_h, w_v = best_w_v),
-    search_dataframe = rbind(grid_cells, grid_r2s, grid_ses)
+    search_dataframe = rbind(grid_cells, grid_r2s, grid_ses),
+    train_val_split_indexes = lapply(
+      train_val_splits,
+      function(fold) {
+        list(
+          train_indices = fold$train_indices,
+          val_indices = fold$val_indices
+        )
+      }
+    )
   )
 }
 
 ### perform quantile thresholding #
 ##
-## TODO: write a description
+## test different degrees of enforced dynamic sparsity to select the one
+## that best balances model performance and simplicity
 ##
 ###################################
 #'
-#' TODO: document fully
-#' TODO: finish making entirely observable post-mortem
+#' @param w_h the parameter controlling horizontal regularization to use
+#' @param w_v the parameter contorlling vertical regularization to use
 #'
-optimize_dvec_elbow <- function(beta_est,
-                                m, max_lag, ars, x, y,
-                                nq1, nq2, max_q,
-                                datasplit, w_h, w_v,
-                                grp_norm_calc_method,
-                                verbose, n_cores) {
+#' @param m is the length of the cycle which t is indexed to minus 1
+#' @param max_lag is the number of effective lags s to consider (starting at 0)
+#' @param ars is the degree of the ar process used to model the residuals
+#'
+#' @param x is the full useable time series for the covariate (flattened) and
+#' the first entry in x MUST align with the first day of the cycle in t
+#' @param y is the full useable series for the target variable (flattened) and
+#' the first entry in y MUST align with the first day of the cycle in t
+#'
+#' @param q_sel_method is a string indicating which of the two q selection
+#' methods ("elbow", "standard_err") should be used to choose the degree of
+#' sparsity that we enforce
+#'
+#' @param q_range is the range of q values (corresponding to degrees of
+#' enforced sparsity) to search over
+#' @param nq1 is the number of points to sample in the first round of q opt.
+#' @param nq2 is the number of points to sample in the second round of q opt.
+#'
+#' @param grp_norm_method is a number 1-3 indicating which of the following
+#' three group norm calculation methods should be used to gauge the relative
+#' importance of the in-day "tail" beyond a certain lag index
+#'
+#' @param datasplit is either NULL or a vector of the form (training frac,
+#' validation frac) which dictates the fractions of the total data time series
+#' that should be used for the training and validation set, respectively. If
+#' this parameter is NULL, we use the full data as both the training and
+#' validation set while testing different degrees of sparsity
+#' @param k_folds_for_cv is the number of folds to use for k-fold cross
+#' validation in order to get more stable estimates of validation error and
+#' to estimate standard errors for use with our final prior-informed hp
+#' selection method.
+#' NOTE: if datasplit is NULL, this parameter is ignored and k-folds is not
+#' performed
+#'
+#' @param d_v_diff the degree of differences to penalize in the lag direction
+#' (1 -> first diff i.e. Ridge Reg., 2 -> second diff i.e. Tikhonov-Phillips)
+#'
+#' @param verbose is a boolean dictating whether progress updates should be
+#' printed during optimization routine
+#' @param n_cores is the number of cores available for parallelising this opt.
+#'
+#' @return FIXME: fill this out
+optimize_dvec <- function(
+  w_h, w_v, m, max_lag, ars, x, y,
+  q_sel_method, q_range, nq1, nq2,
+  grp_norm_calc_method,
+  datasplit, k_folds_for_cv,
+  d_v_diff, remove_na_rows,
+  verbose, n_cores
+) {
+  ## FIXME: currently, the validation design mats also make use of
+  ## lagged target values as additional covariates. this is wrong.
+  ## we validate using the beta parameters, not the full fitted
+  ## b parameters. fix this without creating data leakage.
 
-  n_cores <- max(1L, as.integer(n_cores))
+  ## build entire design matrix using all data which will later
+  ## be split into train/val splits
+  design_mat_full <- get_design_matrix(
+    x, y, first_day_index = 1, m = m,
+    max_lag = max_lag, ars = ars,
+    remove_na_rows = remove_na_rows
+  )
 
-  ## validate beta_est
-  if (length(beta_est) != (m + 1L) * max_lag ||
-        anyNA(beta_est) ||
-        any(!is.finite(beta_est))) {
-    stop("beta_est provided to optimize_dvec is invalid.")
-  }
-
-  ## calculate day-relative group values of the provided beta_est
-  if (grp_norm_calc_method == "new") {
-
-    #FIXME: carefully think through this and update code
-
-    stop("NEW GRP NORM CALCULATION METHOD NOT YET FINALIZED")
-    daytotals <- sapply(seq_len(m + 1), function(day_index) {
-      sum(beta_est[(((day_index - 1) * max_lag) + 1):(day_index * max_lag)])
-    })
-
-    kappa <- 0.1
-    min_day_denom <- quantile(daytotals, kappa)
-
-    group_values <- unlist(lapply(seq_len(m + 1), function(day_index) {
-      beta_t <- beta_est[(((day_index - 1) * max_lag) + 1):(day_index * max_lag)]
-      daytotal <- sum(beta_t)
-      cumsums <- rev(cumsum(rev(beta_t)))
-      cumsums / daytotal
-    }))
+  ## define out training/validation split(s)
+  if (is.null(datasplit)) {
+    k_folds_for_cv <- 1
+    train_val_splits <- list(
+      list(
+        x_train = design_mat_full$design_matrix,
+        y_train = design_mat_full$y_trunc,
+        x_val = design_mat_full$design_matrix,
+        y_val = design_mat_full$y_trunc,
+        train_indices = seq_len(nrow(design_mat_full$design_matrix)),
+        val_indices = seq_len(nrow(design_mat_full$design_matrix))
+      )
+    )
   } else {
-    if (grp_norm_calc_method != "old") warning("Invalid grp_norm_calc_method. Defaulting to old.")  ## nolint
-    group_values <- unlist(lapply(seq_len(m + 1), function(day_index) {
-      beta_t <- beta_est[(((day_index - 1) * max_lag) + 1):(day_index * max_lag)]                   ## nolint
-      rev(cumsum(rev(beta_t ** 2)))
-    }))
-  }
-  ## helper to calculate the dvec associated with zeroing out lags where
-  ## the tail makes up a fraction of less than q*100 % of total in-day
-  ## coefficient value
-  calculate_dvec_from_q <- function(q) {
-    ## form an (m + 1) x max_lag matrix with entry=1 iff corresponding B(s, t)
-    ## should be forced to zero
-    mask_mtx <- matrix(group_values < q, ncol = max_lag, byrow = TRUE)
-    as.numeric(apply(mask_mtx, MARGIN = 1, function(mask_row) {
-      ## zero out all lags beyond the point where the tail fraction falls below
-      ## q even if it later rises back above q due to non-monotonicity of group
-      ## values induced by negative B(s, t) parameter estimates
-      first_ineff_lag <- which(mask_row == 1)[1]
-      if (is.na(first_ineff_lag)) {
-        max_lag
-      } else {
-        first_ineff_lag - 1
+    ## precompute all training/validation data pairs
+    default_val_starts <- floor(seq(from = 1 - datasplit[2], to = 0, by = -datasplit[2]) * nrow(design_mat_full)) ## nolint
+    val_length_d <- floor(datasplit[2] * nrow(design_mat_full))
+    train_length_d <- nrow(design_mat_full) - val_length_d
+    train_val_splits <- lapply(
+      seq_len(k_folds_for_cv),
+      function(fold_index) {
+        if (fold_index <= length(default_val_starts)) {
+          val_start <- default_val_starts[fold_index]
+        } else {
+          val_start <- floor(runif(1, min = 0, max = 1) * nrow(design_mat_full))
+        }
+        val_end <- val_start + val_length_d - 1
+        val_indexes <- ((seq(from = val_start, to = val_end, by = 1) - 1) %% nrow(design_mat_full)) + 1         ## nolint
+
+        train_start <- val_end + 1
+        train_end <- train_start + train_length_d - 1
+        train_indexes <- ((seq(from = train_start, to = train_end, by = 1) - 1) %% nrow(design_mat_full)) + 1   ## nolint
+
+        list(
+          train_mat = design_mat_full$design_matrix[train_indexes, , drop = FALSE],                             ## nolint
+          train_y = design_mat_full$y_trunc[train_indexes],
+          val_mat = design_mat_full$design_matrix[val_indexes, , drop = FALSE],
+          val_y_trunc = design_mat_full$y_trunc[val_indexes],
+          train_indices = train_indexes,
+          val_indices = val_indexes
+        )
       }
-    }))
+    )
   }
 
-  ## helper to find the elbow point in a (generally) increasing
-  ## plot of validation performance as function of # of params
-  ## if loess_span is set to NA, then no smoothing is used
-  get_elbow_index <- function(x, y, min_segment_length = 3, loess_span = 0.4) {
-    ## 1. Bind to original indices to prevent mapping errors after sorting
-    df <- data.frame(orig_idx = seq_along(x), x = x, y = y)
+  ## build our regularization matrices & precompute penalty cross products
+  ## with no sparsity constraints. we can later subset these to solve for
+  ## an arbitrarily sparse beta
+  regmats <- get_regularization_mats(m, max_lag, ars, d_v_diff = d_v_diff)
+  h_penalty <- exp(w_h) * crossprod(regmats$d_h)
+  v_penalty <- exp(w_v) * crossprod(regmats$d_v)
+  penalty_term <- h_penalty + v_penalty
 
-    ## 2. Filter non-finite values
-    df <- df[is.finite(df$x) & is.finite(df$y), ]
+  ## for each fold, mask precompute fold-specific terms in each linear
+  ## regression to reduce solving overhead. these terms are calculated with no
+  ## sparsity constraints. also precalculate the TSS of the validation target
+  ## series to speed up R2 computation during loop
+  train_val_splits <- lapply(train_val_splits, function(fold) {
+    fold$xtx <- crossprod(fold$train_mat)
+    fold$xty <- crossprod(fold$train_mat, fold$train_y)
+    fold$val_tss <- sum((fold$val_y_trunc - mean(fold$val_y_trunc))^2)
 
-    ## 2.5 Remove duplicated x values to prevent LOESS fit collapse
-    df <- df[!duplicated(df$x), ]
+    fold
+  })
 
-    ## Ensure enough data remains to fit LOESS model
-    if (nrow(df) < (min_segment_length * 2)) {
-      stop("get_elbow_index() failed: Insufficient finite pairs for piecewise regression.") ## nolint
+  ## helper function that takes a set of B(s, t) parameters and calculates their
+  ## group measures in accordance with grp_norm_calc_method
+  calculate_group_measures <- function(beta_vec) {
+    stop("not implemented yet") ## FIXME:
+  }
+
+  ## helper that takes in a set of group measures and a q in (0, 1) and returns
+  ## a delta vector by calculating either
+  ## 1. which (s, t) coordinates have group measures below q (for fractional
+  ## group measures as calculated using method 2)
+  ## 2. which (s, t) coordinates have group measures below the qth quantile of
+  ## all group measures (for non-fractional group measures as in method 1)
+  calculate_dvec_from_q <- function(group_measures, q_) {
+    stop("not implemented yet") ## FIXME:
+  }
+
+  ## for each fold, precompute an initial estimate of B(s, t) using the in-fold
+  ## training data without any sparsity constraints. also pre-calculate the
+  ## group measures for this initial estimate for later use in generating delta
+  ## vectors for each candidate q
+  train_val_splits <- lapply(train_val_splits, function(fold) {
+    lhs <- fold$xtx + penalty_term
+
+    fit <- numeric(ncol(design_mat_full$design_matrix))
+    fit <- Matrix::solve(lhs, fold$xty)
+
+    if (ars > 0) {
+      fit <- get_beta_from_b_safely(fit,
+                                    m = m,
+                                    max_lag = max_lag,
+                                    ars = ars,
+                                    dvec = rep(max_lag, m + 1))
     }
 
-    ## 3. Sort strictly by x to correctly sequence the curve
+    fold$init_beta_est <- fit
+    fold$init_gp_norms <- calculate_group_measures(fit)
+  })
+
+  ## helper function for testing a candidate q value across all available
+  ## train/val splits.
+  ## for a given candidate q, first fit on the training set, then calculate
+  ## group norms using that fit, perform thresholding, refit on the training
+  ## set given the imposed sparsity profile, and then score on the validation
+  ## set
+  score_q <- function(q_) {
+    tryCatch({
+      ## evaluate this hyperparameter pair across all folds
+      fold_fits <- lapply(train_val_splits, function(fold) {
+
+        ## calculate a delta vector from the provided q_ and the in-fold group
+        ## measures that were precalculated
+        dvec_ <- calculate_dvec_from_q(fold$init_gp_norms, q_)
+
+        ## calculate the number of non-zero parameters that the constructed
+        ## delta vector permits
+        n_params <- sum(dvec_)    ## TODO: check that this is correct
+
+        ## calculate sparsity mask
+        keep_coef <- c(
+          unlist(Map(
+            function(i, d) (i - 1L) * (max_lag + ars) + seq_len(d + ars),
+            seq_along(dvec_), dvec_
+          )),
+          (m + 1L) * (max_lag + ars) + seq_len(ars)
+        )
+
+        ## mask the penalty term using the sparsity mask
+        penalty_term_ <- penalty_term[keep_coef, keep_coef, drop = FALSE]
+
+        ## mask the data-dependent terms using the sparsity mask
+        xtx_ <- fold$xtx[keep_coef, keep_coef, drop = FALSE]
+        xty_ <- fold$xty[keep_coef, keep_coef, drop = FALSE]
+
+        ## solve the sparse linear regression
+        lhs <- xtx_ + penalty_term_
+
+        fit <- numeric(ncol(design_mat_full$design_matrix))
+        fit[keep_coef] <- Matrix::solve(lhs, xty_)
+
+        ## retrieve the beta coefficients from the linear regression solution
+        if (ars > 0) {
+          fit <- get_beta_from_b_safely(fit,
+                                        m = m,
+                                        max_lag = max_lag,
+                                        ars = ars,
+                                        dvec = dvec_)
+        }
+
+        ## score the beta coefficients against the validation set for this fold
+        pred_y <- as.numeric(fold$val_mat %*% fit)
+        r2 <- 1 - sum((pred_y - fold$val_y_trunc)^2) / fold$val_tss
+
+        list(r2 = r2, n_params = n_params)
+      }, FUN.VALUE = numeric(1))
+
+      fold_r2s <- vapply(fold_fits, function(x) x["r2"])
+      fold_n_params <- vapply(fold_fits, function(x) x["n_params"])
+
+      ## filter all fits to only include the ones that didn't fail
+      valid_r2s <- fold_r2s[is.finite(fold_r2s)]
+      valid_n_params <- fold_n_params[is.finite(fold_r2s)]
+      k_valid <- length(valid_r2s)
+
+      ## calculate the mean number of parameters across all fits
+      mean_n_params <- if (k_valid > 0) mean(valid_n_params) else NA_real_
+
+      ## calculate the mean validation r2 across all successful fits
+      mean_r2 <- if (k_valid > 0) mean(valid_r2s) else NA_real_
+
+      ## calculate the standard error of the r2 across all successful fits
+      se_r2 <- if (k_valid > 1) sd(valid_r2s) / sqrt(k_valid) else NA_real_
+
+      ## return values
+      list(
+        np = mean_n_params,
+        r2 = mean_r2,
+        se = se_r2
+      )
+    }, error = function(e) {
+      warning(paste0("score_q failed with q = ", q_, "\n"))
+      NA_real_
+    })
+  }
+
+  ## helper to find the elbow point in a plot of y(x) with optional y smoothing
+  get_elbow_index <- function(p, e, smooth_e) {
+    df <- data.frame(orig_idx = seq_along(p), x = p, y = e)
+    df <- df[is.finite(df$x) & is.finite(df$y), ]
+    df <- df[!duplicated(df$x), ]
     df <- df[order(df$x), ]
 
-    ## 4. Extract the underlying signal from the validation noise
-    ## A span of 0.4 provides strong protection against local spikes while
-    ## preserving the macroscopic concavity of the curve
-    if (is.na(loess_span)) {
-      df$y_smooth <- y
+    ## if indicated, smooth the y curve using LOESS
+    if (smooth_e) {
+      df$y_smooth <- predict(
+        loess(y ~ x, data = df, span = 0.1, degree = 1)    ## FIXME: think more carfully about these harcoded params   ## nolint
+      )
     } else {
-      df$y_smooth <- predict(loess(y ~ x, data = df, span = loess_span))
+      df$y_smooth <- e
     }
 
-    ## 5. Segmented Regression (Structural Break Detection)
+    ## find the elbow point in the plot of smooth y as a function of x
+    ## by using segmented regression and minimizing the total RSS
+    ## (this is just structural break detection)
     n <- nrow(df)
     total_rss <- numeric(n)
     total_rss[] <- Inf
+    for (i in 3:(n - 4)) {
 
-    ## Iterate through all valid knot points, fitting a line to the "steep"
-    ## parameter-gain phase and a line to the "flat" asymptotic phase.
-    for (i in min_segment_length:(n - min_segment_length + 1)) {
-
-      ## Fit the left segment (from parameter minimum to candidate elbow)
+      ## left segment (steep rise)
       left_fit <- lm(y_smooth ~ x, data = df[1:i, ])
       rss_left <- sum(residuals(left_fit)^2)
 
-      ## Fit the right segment (from candidate elbow to parameter maximum)
+      ## right segment (slow increase)
       right_fit <- lm(y_smooth ~ x, data = df[i:n, ])
       rss_right <- sum(residuals(right_fit)^2)
 
       total_rss[i] <- rss_left + rss_right
     }
-
-    ## 6. Find the knot that minimized the combined squared error of both lines
     best_sorted_idx <- which.min(total_rss)
 
     ## return all values needed to reconstruct this optimization post-mortem
     list(
-      best_value = y[df$orig_idx[best_sorted_idx]],
-      elbow_df = df,
-      loess_span = loess_span,
-      min_segment_length = min_segment_length
+      best_index = best_sorted_idx,
+      elbow_df = df
     )
   }
 
-  ## get training and validation split (or just duplicate
-  ## training data if using the old fitting routine)
-  if (is.na(datasplit)) {
-    x_train <- x
-    y_train <- y
-    x_val <- x
-    y_val <- y
-    first_day_index_train <- 1
-    first_day_index_val <- 1
-  } else {
-    stopifnot(typeof(datasplit) == "numeric" && length(datasplit) == 2 && sum(datasplit) == 1)  ## nolint
-    ## get training data
-    n_train <- round(length(x) * datasplit[1])
-    x_train <- x[1 : n_train]
-    y_train <- y[1 : n_train]
-    first_day_index_train <- 1
+  ## helper function that takes in a set of validation errors, standard
+  ## errors, qs, and corresponding model sizes (# of parameters) and
+  ## returns the "best" q based on whatever q_sel_method is.
+  select_best_q <- function(qs, np, ve, se) {
+    if (q_sel_method == "elbow") {
+      ## if datasplit is null, we have a plot of in-sample error with respect
+      ## to number of parameters, so we can assume relative smoothness and
+      ## monotonicity. if we are using a k-folds structure (i.e. datasplit is
+      ## not NULL), then we should smooth our validation error curve
+      best_q_index <- get_elbow_index(
+        x = np,   ## FIXME: consider using q for this instead of np as the q values are unique  ## nolint
+        y = ve,
+        smooth_y = !is.null(datasplit)
+      )
+      qs[best_q_index]
+    } else if (q_sel_method == "standard_err") {
+      ## we want to use the sparsest model (the model with the highest q) that
+      ## acheived validation error within 1 standard error of our best observed
+      ## validation error
+      best_ve_idx <- which.max(ve)
+      best_ve <- ve[best_ve_idx]
+      best_se <- se[best_ve_idx]
 
-    ## get validation data
-    x_val <- x[(n_train + 1):length(x)]
-    y_val <- y[(n_train + 1):length(y)]
-    first_day_index_val <- ((n_train) %% (m + 1)) + 1
-  }
+      min_acceptable_ve <- best_ve - best_se
 
-  ## test different values of neg_thresh (round 1)
-  qs_1 <- seq(0.0, max_q, length.out = nq1)
-  nonzero_coeffs_1 <- rep(NA_real_, nq1)
-  r2s_1 <- rep(NA_real_, nq1)
-  for (i in seq_len(nq1)) {
-    q_i <- qs_1[i]
-    dvec_i <- calculate_dvec_from_q(q_i)
-    nonzero_coeffs_1[i] <- sum(dvec_i)
+      candidate_qs <- qs[ve >= min_acceptable_ve]
 
-    r2s_1[i] <- tryCatch(expr = {
-      bvec_i <- perform_fit(m = m, max_lag = max_lag, ars = ars,
-                            w_h = w_h, w_v = w_v,
-                            x = x_train, y = y_train,
-                            first_day_index = first_day_index_train,
-                            dvec = dvec_i)
-
-      ## if ars > 0, deconvolve bvec into beta vector as we seek to
-      ## validate using the underlying IRF coefficients, not the full
-      ## ar-inclusive b vector as to encourage our IRF coefficients to
-      ## capture as much of the long-tailed behaviour as possible
-      if (ars > 0) {
-        bvec_i <- get_beta_from_b_safely(bvec_i,
-                                         m = m, max_lag = max_lag, ars = ars,
-                                         dvec = dvec_i)
-      }
-
-      calculate_predictive_r2(bvec_i,
-                              x = x_val, y = y_val,
-                              first_day_index = first_day_index_val,
-                              m = m, max_lag = max_lag, ars = 0)
-    }, error = function(e) {
-      print(e)
-      NA_real_
-    })
-  }
-
-  ## detect elbow point in graph of validation accuracy as a function
-  ## of number of retained parameters
-  elbow_check_1 <- get_elbow_index(x = nonzero_coeffs_1, y = r2s_1)
-  best_q1 <- elbow_check_1$best_value
-  if (verbose) {
-    cat("first round of dvec optimization complete. q selected:",
-        best_q1, "\n")
-  }
-
-  ## try to refine q2 estimate (but be careful of potentially
-  ## overly tight search neighborhood)
-  elbow_check_2 <- tryCatch(expr = {
-    ## test different values of neg_thresh in neighborhood of initial estimate
-    qs_2 <- seq(from = max(best_q1 * 0.75, 0),
-                to = min(best_q1 * 1.25, max_q),
-                length.out = nq2)
-    nonzero_coeffs_2 <- rep(NA_real_, nq2)
-    r2s_2 <- rep(NA_real_, nq2)
-    for (i in seq_len(nq2)) {
-      q_i <- qs_2[i]
-      dvec_i <- calculate_dvec_from_q(q_i)
-      nonzero_coeffs_2[i] <- sum(dvec_i)
-
-      r2s_2[i] <- tryCatch(expr = {
-        bvec_i <- perform_fit(m = m, max_lag = max_lag, ars = ars,
-                              w_h = w_h, w_v = w_v,
-                              x = x_train, y = y_train,
-                              first_day_index = first_day_index_train,
-                              dvec = dvec_i)
-
-        ## if ars > 0, deconvolve bvec into beta vector as we seek to
-        ## validate using the underlying IRF coefficients, not the full
-        ## ar-inclusive b vector as to encourage our IRF coefficients to
-        ## capture as much of the long-tailed behaviour as possible
-        if (ars > 0) {
-          bvec_i <- get_beta_from_b_safely(bvec_i,
-                                           m = m, max_lag = max_lag, ars = ars,
-                                           dvec = dvec_i)
-        }
-
-        calculate_predictive_r2(bvec_i,
-                                x = x_val, y = y_val,
-                                first_day_index = first_day_index_val,
-                                m = m, max_lag = max_lag, ars = 0)
-      }, error = function(e) {
-        print(e)
-        NA_real_
-      })
+      max(candidate_qs)
+    } else {
+      stop(paste0("Invalid q_sel_method (", q_sel_method,
+                  ") passed to optimize_dvec...\n"))
     }
+  }
 
-    ## detect elbow point in graph of validation accuracy as a function
-    ## of number of retained parameters (again)
-    elbow_check_2 <- get_elbow_index(x = nonzero_coeffs_2, y = r2s_2)
+  ######################### FIRST ROUND OF SEARCH #############################
+
+  ## run first round of q search in parallel
+  round_1_qs <- seq(from = q_range[1], to = q_range[2], length.out = nq1)
+  round_1_scores <- parallel_lapply(seq_along(round_1_qs), function(i) {
+    res <- score_q(round_1_qs[i])
     if (verbose) {
-      cat("second round of dvec optimization complete. q selected:",
-          elbow_check_2$best_value, "\n")
+      cat("q search round 1, iteration", i, "out of", nq1,
+          "complete; R2 is", res["r2"], "(SE:", res["se"], ")\n",
+          "q is", round_1_qs[i], "which corresponds to", res["np"],
+          "nonzero parameters, total.", "\n")
     }
-    elbow_check_2
-  }, error = function(e) {
-    cat("Second round of dvec optimization collapsed due to",
-        "lack of sparsity variation in searched q-neighborhood...\n")
-    NA
-  })
-  best_q_ovr <- if (!is.na(elbow_check_2)) elbow_check_2$best_value else best_q1
+    res
+  }, n_cores)
 
-  ## calculate optimal delta vector using optimal q found above
-  final_delta_vec <- calculate_dvec_from_q(best_q_ovr)
+  ## extract val errors, standard errors, and parameter counts from fits
+  round_1_r2s <- vapply(round_1_scores, function(x) x["r2"], numeric(1))
+  round_1_ses <- vapply(round_1_scores, function(x) x["se"], numeric(1))
+  round_1_nps <- vapply(round_1_scores, function(x) x["np"], numeric(1))
+
+  ## find the best q in round 1
+  best_q_1 <- select_best_q(
+    qs = round_1_qs, np = round_1_nps,
+    ve = round_1_r2s, se = round_1_ses
+  )
+
+  ######################## SECOND ROUND OF SEARCH #############################
+
+  ## if nq2 > 0, run the second round of q search in parallel over a smaller
+  ## neighborhood centered around the best q from the first round
+  if (nq2 > 0) {
+    round_2_qs <- seq(
+      from = best_q_1 * (1.5 ** -1),
+      to = min(best_q_1 * 1.5, q_range[2]),
+      length.out = nq2
+    )
+    round_2_scores <- parallel_lapply(seq_along(round_2_qs), function(i) {
+      res <- score_q(round_2_qs[i])
+      if (verbose) {
+        cat("q search round 2, iteration", i, "out of", nq1,
+            "complete; R2 is", res["r2"], "(SE:", res["se"], ")\n",
+            "q is", round_1_qs[i], "which corresponds to", res["np"],
+            "nonzero parameters, total.", "\n")
+      }
+      res
+    }, n_cores)
+
+    ## extract val errors, standard errors, and parameter counts from fits
+    round_2_r2s <- vapply(round_2_scores, function(x) x["r2"], numeric(1))
+    round_2_ses <- vapply(round_2_scores, function(x) x["se"], numeric(1))
+    round_2_nps <- vapply(round_2_scores, function(x) x["np"], numeric(1))
+
+    ## find the best q from round 2
+    best_q_2 <- select_best_q(
+      qs = round_2_qs, np = round_2_nps,
+      ve = round_2_r2s, se = round_2_ses
+    )
+  } else {
+    round_2_scores <- NA
+    round_2_qs <- NA
+    best_q_2 <- NA
+  }
+
+  ##################### CALCULATE FINAL DELTA VECTOR ##########################
+
+  if (!is.na(best_q_2)) {
+    best_q_overall <- best_q_2
+  } else {
+    best_q_overall <- best_q_1
+  }
+
+  full_beta <- perform_fit(
+    m = m, max_lag = max_lag, ars = ars,
+    w_h = w_h, w_v = w_v,
+    x = x, y = y, first_day_index = 1,
+    dvec = NULL, remove_na_rows = remove_na_rows
+  )
+  if (ars > 0) {
+    full_beta <- get_beta_from_b_safely(
+      bvec = full_beta, m = m, max_lag = max_lag,
+      ars = ars, dvec = NULL
+    )
+  }
+
+  full_gp_norms <- calculate_group_measures(full_beta)
+
+  final_dvec <- calculate_dvec_from_q(
+    group_measures = full_gp_norms,
+    q_ = best_q_overall
+  )
+
+  ################################## RETURN ###################################
 
   list(
-    delta = final_delta_vec,
-    elbow_check_1 = elbow_check_1,
-    elbow_check_2 = elbow_check_2
+    final_dvec = final_dvec,
+    round_1_qs = round_1_qs,
+    round_1_scores = round_1_scores,
+    round_2_qs = round_2_qs,
+    round_2_scores = round_2_scores,
+    train_val_split_indexes = lapply(
+      train_val_splits,
+      function(fold) {
+        list(
+          train_indices = fold$train_indices,
+          val_indices = fold$val_indices
+        )
+      }
+    )
   )
 }
 
